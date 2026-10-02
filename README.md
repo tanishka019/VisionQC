@@ -60,7 +60,7 @@ Create **two services from this repo**, one per folder:
 
 ## 📋 How to Demo (Judge Flow)
 
-1. **Train** → Go to `Train Model` → upload 20–30 GOOD product photos → click "Learn Normal". This takes about 20–60 s on CPU and progress streams live.
+1. **Train** → Go to `Train Model` → upload 20–30 GOOD product photos → click "Learn Normal". This takes about 1–2 minutes on CPU (longer on small cloud instances) and progress streams live.
 2. **Inspect** → Go to `Inspect` → start the webcam, hold the product up and click "Capture & Inspect", or upload one or more images.
 3. **View the heatmap** → regions that look unlike anything in the training set glow red/yellow. Normal regions show the original image.
 4. **Tune the threshold** → Go to `Dashboard` → drag the slider → Save. The dashboard updates live as inspections come in.
@@ -137,9 +137,9 @@ Frontend (`frontend/.env`): `VITE_API_URL` (backend URL) and `VITE_API_KEY` (onl
 
 ## 🧠 How It Works
 
-1. **Training**: the uploaded good images are split into a memory-bank set (~80%) and a held-out calibration set (~20%, at least 1).
-2. **PatchCore**: a frozen WideResNet-50 extracts patch features (layers 2 and 3) from the memory-bank images. Coreset subsampling (10%) keeps a compact memory bank of "normal" patches.
-3. **Calibration**: the held-out good images are scored. Their lowest and highest raw scores define the scale, so **score 0 ≈ a typical good part and 0.5 = the most unusual good part seen**. That's why the default threshold of 0.5 is a sensible starting point.
+1. **Features**: a frozen WideResNet-50 extracts patch features (layers 2 and 3) from every uploaded good image, once.
+2. **Calibration (cross-validation)**: the images are split into 5 folds. Each image is scored against a memory bank built from the *other* folds, giving an honest "unseen good part" score for every image. Their lowest and highest scores define the scale, so **score 0 ≈ a typical good part and 0.5 = the most unusual good part seen**. That's why the default threshold of 0.5 is a sensible starting point, and why training builds several memory banks.
+3. **PatchCore**: the final memory bank is built from all images using coreset subsampling (10%), which keeps a compact set of "normal" patches.
 4. **Inference**: a new image is resized to 256×256 and ImageNet-normalised. Each patch is compared with its nearest neighbour in the memory bank, giving a per-patch anomaly map and an image score.
 5. **Heatmap**: the anomaly map is scaled against the calibration values and blended in, with transparency where things look normal.
 6. **Decision**: `score >= threshold → FAIL`, otherwise `PASS`. Confidence is how far the score is from the opposite verdict.
