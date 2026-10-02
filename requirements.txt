@@ -1,7 +1,7 @@
 --extra-index-url https://download.pytorch.org/whl/cpu
 streamlit>=1.35.0
-torch==2.3.0+cpu
-torchvision==0.18.0+cpu
+torch==2.3.0
+torchvision==0.18.0
 anomalib[core]==1.1.0
 lightning>=2.2,<2.7
 numpy==1.26.4
