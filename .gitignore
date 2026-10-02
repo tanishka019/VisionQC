@@ -1,6 +1,19 @@
-﻿backend/venv/
+# Python
+backend/venv/
 venv/
 __pycache__/
 *.pyc
+.pytest_cache/
+
+# Runtime data (created by the backend)
+backend/visionqc.db
+backend/visionqc.db-*
+backend/uploads/
+backend/results/
+backend/train_temp/
+backend/model_artifacts/
+backend/dataset/
+
+# Env / deps
 .env
 node_modules/

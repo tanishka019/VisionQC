@@ -1,12 +1,15 @@
 """
-db.py — SQLite database layer for VisionQC (v2)
+db.py — SQLite database layer for VisionQC (v3)
 """
 import sqlite3
 import os
 from datetime import datetime
 from typing import Optional
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "visionqc.db")
+DB_PATH = os.getenv(
+    "VISIONQC_DB_PATH",
+    os.path.join(os.getenv("VISIONQC_DATA_DIR", os.path.dirname(__file__)), "visionqc.db"),
+)
 
 
 def get_conn():
@@ -112,14 +115,19 @@ def get_history(
     return rows
 
 
-def delete_inspection(inspection_id: int) -> bool:
+def delete_inspection(inspection_id: int) -> Optional[tuple]:
+    """Delete one inspection; returns its (image_path, heatmap_path), or None if not found."""
     conn = get_conn()
     cur = conn.cursor()
+    cur.execute("SELECT image_path, heatmap_path FROM inspections WHERE id = ?", (inspection_id,))
+    row = cur.fetchone()
+    if row is None:
+        conn.close()
+        return None
     cur.execute("DELETE FROM inspections WHERE id = ?", (inspection_id,))
     conn.commit()
-    affected = cur.rowcount
     conn.close()
-    return affected > 0
+    return (row["image_path"], row["heatmap_path"])
 
 
 def clear_history() -> int:
@@ -132,10 +140,13 @@ def clear_history() -> int:
     return count
 
 
-def get_total_inspections() -> int:
+def get_total_inspections(result_filter: Optional[str] = None) -> int:
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute("SELECT COUNT(*) as cnt FROM inspections")
+    if result_filter in ("PASS", "FAIL"):
+        cur.execute("SELECT COUNT(*) as cnt FROM inspections WHERE result = ?", (result_filter,))
+    else:
+        cur.execute("SELECT COUNT(*) as cnt FROM inspections")
     row = cur.fetchone()
     conn.close()
     return row["cnt"] if row else 0
@@ -204,7 +215,7 @@ def get_weekly_stats() -> list:
             SUM(CASE WHEN result = 'PASS' THEN 1 ELSE 0 END) as passed,
             SUM(CASE WHEN result = 'FAIL' THEN 1 ELSE 0 END) as failed
         FROM inspections
-        WHERE timestamp >= date('now', '-6 days')
+        WHERE timestamp >= date('now', 'localtime', '-6 days')
         GROUP BY day
         ORDER BY day
     """)

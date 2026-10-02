@@ -1,5 +1,5 @@
 // src/pages/Inspect.jsx — v2
-import { useRef, useState, useCallback, useEffect } from "react";
+import { useRef, useState, useCallback } from "react";
 import Webcam from "react-webcam";
 import { inspectImage, batchInspect, API_BASE } from "../api";
 

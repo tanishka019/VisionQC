@@ -2,10 +2,12 @@
 import axios from "axios";
 
 export const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:8000";
+const API_KEY = import.meta.env.VITE_API_KEY;  // must match the backend's VISIONQC_API_KEY, if set
 
 const api = axios.create({
   baseURL: API_BASE,
   timeout: 120000,  // 2 min for slow inference
+  headers: API_KEY ? { "X-API-Key": API_KEY } : {},
 });
 
 // Response interceptor for unified error shape
@@ -70,4 +72,20 @@ export const batchInspect = (files) => {
     headers: { "Content-Type": "multipart/form-data" },
     timeout: 300000,
   });
+};
+
+// ─── Live feed (WebSocket) ─────────────────────────
+// Calls onMessage(data) for every new inspection; reconnects automatically.
+// Returns an unsubscribe function.
+export const subscribeLive = (onMessage) => {
+  let ws, timer, closed = false;
+  const connect = () => {
+    ws = new WebSocket(`${API_BASE.replace(/^http/, "ws")}/ws/live`);
+    ws.onmessage = (e) => {
+      try { onMessage(JSON.parse(e.data)); } catch { /* noop */ }
+    };
+    ws.onclose = () => { if (!closed) timer = setTimeout(connect, 3000); };
+  };
+  connect();
+  return () => { closed = true; clearTimeout(timer); ws?.close(); };
 };

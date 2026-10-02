@@ -1,0 +1,11 @@
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+tests/
+visionqc.db*
+uploads/
+results/
+train_temp/
+model_artifacts/
+dataset/

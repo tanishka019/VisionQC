@@ -1,0 +1,9 @@
+# Railway service config — set the service's Root Directory to /frontend
+# and its Config File Path to /frontend/railway.toml
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+healthcheckPath = "/"
+restartPolicyType = "ON_FAILURE"

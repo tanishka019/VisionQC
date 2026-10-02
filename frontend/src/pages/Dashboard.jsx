@@ -5,7 +5,7 @@ import {
   XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Legend,
 } from "recharts";
-import { getStats, getThreshold, setThreshold } from "../api";
+import { getStats, getThreshold, setThreshold, subscribeLive } from "../api";
 
 // ─── Stat Card ───────────────────────────────────────────────────────────────
 function StatCard({ label, value, sub, variant, icon, animDelay = 0 }) {
@@ -86,7 +86,11 @@ export default function Dashboard() {
   useEffect(() => {
     refresh();
     const t = setInterval(refresh, 15000);
-    return () => clearInterval(t);
+    // Refresh stats (not the threshold being edited) as soon as an inspection lands
+    const unsubscribe = subscribeLive(() => {
+      getStats().then((r) => setStats(r.data)).catch(() => {});
+    });
+    return () => { clearInterval(t); unsubscribe(); };
   }, [refresh]);
 
   // Build hourly chart data (fill up to current hour)

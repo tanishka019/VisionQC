@@ -16,7 +16,7 @@ const NAV = [
 ];
 
 function Sidebar({ modelTrained, productName }) {
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed] = useState(false);
 
   return (
     <aside className="sidebar" style={collapsed ? { width: "var(--sidebar-w-sm)" } : {}}>

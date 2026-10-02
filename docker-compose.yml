@@ -1,0 +1,26 @@
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    environment:
+      VISIONQC_CORS_ORIGINS: "http://localhost:5173"
+      # VISIONQC_API_KEY: "change-me"
+    volumes:
+      - visionqc-data:/data
+      - hf-cache:/root/.cache   # backbone weights, so they download only once
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_URL: "http://localhost:8000"
+        # VITE_API_KEY: "change-me"
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend
+
+volumes:
+  visionqc-data:
+  hf-cache:

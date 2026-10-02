@@ -1,6 +1,15 @@
 """
-main.py — VisionQC FastAPI Backend (v2 – Professional)
+main.py — VisionQC FastAPI Backend (v3)
+
+Environment variables (all optional):
+    VISIONQC_CORS_ORIGINS   comma-separated allowed origins
+                            (default: http://localhost:5173,http://127.0.0.1:5173; "*" allows all)
+    VISIONQC_API_KEY        if set, POST/DELETE requests must send it in the X-API-Key header
+    VISIONQC_MAX_UPLOAD_MB  per-file upload limit in MB (default 20)
+    VISIONQC_KEEP_FILES     max number of uploaded images (and heatmaps) kept on disk (default 2000)
+    VISIONQC_DATA_DIR       where uploads, results, the model and the DB live (default: this folder)
 """
+import io
 import os
 import shutil
 import uuid
@@ -10,18 +19,20 @@ import json
 from pathlib import Path
 from datetime import datetime
 from typing import List, Optional
-from contextlib import asynccontextmanager
 
 from fastapi import (
     FastAPI, File, UploadFile, HTTPException,
-    Form, Query, WebSocket, WebSocketDisconnect,
+    Form, Query, Request, WebSocket, WebSocketDisconnect,
 )
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, StreamingResponse
+from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel
 
 import db
+from ml import model as ml
 
 logging.basicConfig(
     level=logging.INFO,
@@ -29,10 +40,19 @@ logging.basicConfig(
 )
 logger = logging.getLogger("visionqc")
 
-BASE_DIR    = Path(__file__).parent
-UPLOADS_DIR = BASE_DIR / "uploads"
-RESULTS_DIR = BASE_DIR / "results"
-TRAIN_DIR   = BASE_DIR / "train_temp"
+VERSION     = "3.0.0"
+DATA_DIR    = ml.DATA_DIR
+UPLOADS_DIR = DATA_DIR / "uploads"
+RESULTS_DIR = ml.RESULTS_DIR
+TRAIN_DIR   = DATA_DIR / "train_temp"
+
+CORS_ORIGINS  = [o.strip() for o in os.getenv(
+    "VISIONQC_CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"
+).split(",") if o.strip()]
+API_KEY       = os.getenv("VISIONQC_API_KEY") or None
+MAX_UPLOAD_MB = float(os.getenv("VISIONQC_MAX_UPLOAD_MB", "20"))
+KEEP_FILES    = int(os.getenv("VISIONQC_KEEP_FILES", "2000"))
+IMAGE_EXTS    = ml.IMAGE_EXTS
 
 for d in [UPLOADS_DIR, RESULTS_DIR, TRAIN_DIR]:
     d.mkdir(parents=True, exist_ok=True)
@@ -51,32 +71,124 @@ async def _broadcast_train_event(data: dict):
             pass
 
 
-# ─── App ──────────────────────────────────────────────────────────────────────
-app = FastAPI(title="VisionQC API", version="2.0.0", docs_url="/docs")
+async def _set_train_state(state: dict):
+    global _train_state
+    _train_state = state
+    await _broadcast_train_event(state)
 
+
+# ─── App ──────────────────────────────────────────────────────────────────────
+app = FastAPI(title="VisionQC API", version=VERSION, docs_url="/docs")
+
+@app.middleware("http")
+async def require_api_key(request: Request, call_next):
+    """When VISIONQC_API_KEY is set, protect every state-changing request."""
+    if API_KEY and request.method in ("POST", "PUT", "PATCH", "DELETE"):
+        if request.headers.get("x-api-key") != API_KEY:
+            return JSONResponse({"detail": "Invalid or missing API key."}, status_code=401)
+    return await call_next(request)
+
+
+# Added last so it is the outermost layer: even 401s carry CORS headers.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 app.mount("/results", StaticFiles(directory=str(RESULTS_DIR)), name="results")
 app.mount("/uploads", StaticFiles(directory=str(UPLOADS_DIR)), name="uploads")
 
 
+# ─── Helpers ──────────────────────────────────────────────────────────────────
+def model_is_trained() -> bool:
+    """The DB flag and the checkpoint on disk must agree."""
+    return db.get_config("model_trained") == "true" and ml.is_trained()
+
+
+async def read_image_upload(file: UploadFile) -> tuple[bytes, str]:
+    """Read an upload, enforcing extension, size and that it decodes as an image."""
+    ext = Path(file.filename or "").suffix.lower() or ".jpg"
+    if ext not in IMAGE_EXTS:
+        raise ValueError(f"Unsupported file type '{ext}'. Allowed: {', '.join(sorted(IMAGE_EXTS))}.")
+    data = await file.read()
+    if len(data) > MAX_UPLOAD_MB * 1024 * 1024:
+        raise ValueError(f"File too large (max {MAX_UPLOAD_MB:g} MB).")
+    try:
+        Image.open(io.BytesIO(data)).verify()
+    except (UnidentifiedImageError, OSError, SyntaxError):
+        raise ValueError("File is not a valid image.")
+    return data, ext
+
+
+def prune_old_files(directory: Path, keep: int = KEEP_FILES):
+    """Keep only the newest `keep` files in a directory."""
+    files = sorted((f for f in directory.iterdir() if f.is_file()), key=lambda f: f.stat().st_mtime)
+    for f in files[:-keep] if keep > 0 else files:
+        f.unlink(missing_ok=True)
+
+
+def remove_files(*paths: Optional[str]):
+    for p in paths:
+        if p:
+            Path(p).unlink(missing_ok=True)
+
+
+async def run_inspection(file: UploadFile) -> dict:
+    """Validate, save, inspect, log and broadcast one image."""
+    data, ext = await read_image_upload(file)
+    uid = uuid.uuid4().hex
+    image_path = UPLOADS_DIR / f"{uid}{ext}"
+    image_path.write_bytes(data)
+
+    threshold = float(db.get_config("threshold") or 0.5)
+    result = await run_in_threadpool(ml.inspect, image_path, threshold)
+
+    heatmap_url = None
+    if result.get("heatmap_path"):
+        heatmap_url = f"/results/{Path(result['heatmap_path']).name}"
+
+    log_id = db.log_inspection(
+        image_path=str(image_path),
+        heatmap_path=result.get("heatmap_path", ""),
+        score=result["score"],
+        confidence=result["confidence"],
+        result=result["result"],
+        threshold=threshold,
+        filename=file.filename,
+    )
+
+    payload = {
+        "id": log_id,
+        "score": result["score"],
+        "confidence": result["confidence"],
+        "result": result["result"],
+        "threshold": threshold,
+        "heatmap_url": heatmap_url,
+        "image_url": f"/uploads/{uid}{ext}",
+        "filename": file.filename,
+        "timestamp": datetime.now().isoformat(),
+    }
+    await broadcast_inspection({"type": "inspection", **payload})
+    return payload
+
+
+def prune_storage():
+    prune_old_files(UPLOADS_DIR)
+    prune_old_files(RESULTS_DIR)
+
+
 # ─── Health ───────────────────────────────────────────────────────────────────
 @app.get("/health")
 def health():
-    trained = db.get_config("model_trained") == "true"
-    product = db.get_config("product_name") or "Product"
-    total   = db.get_total_inspections()
     return {
         "status": "ok",
-        "model_trained": trained,
-        "product_name": product,
-        "total_inspections": total,
-        "version": "2.0.0",
+        "model_trained": model_is_trained(),
+        "product_name": db.get_config("product_name") or "Product",
+        "total_inspections": db.get_total_inspections(),
+        "version": VERSION,
         "uptime_ts": datetime.now().isoformat(),
     }
 
@@ -102,24 +214,21 @@ def set_threshold(body: ThresholdBody):
 # ─── Model status ─────────────────────────────────────────────────────────────
 @app.get("/model/status")
 def model_status():
-    trained = db.get_config("model_trained") == "true"
-    product = db.get_config("product_name") or "Product"
-    trained_at = db.get_config("trained_at") or None
-    image_count = db.get_config("train_image_count") or "0"
     return {
-        "trained": trained,
-        "product_name": product,
-        "trained_at": trained_at,
-        "image_count": int(image_count),
+        "trained": model_is_trained(),
+        "product_name": db.get_config("product_name") or "Product",
+        "trained_at": db.get_config("trained_at") or None,
+        "image_count": int(db.get_config("train_image_count") or "0"),
     }
 
 
 @app.delete("/model/reset")
 def reset_model():
     """Delete trained model and reset state."""
-    from ml.model import reset_model as ml_reset
+    if _train_state.get("status") == "running":
+        raise HTTPException(409, "Training in progress.")
     try:
-        ml_reset()
+        ml.reset_model()
     except Exception as e:
         logger.warning(f"ml_reset error: {e}")
     db.set_config("model_trained", "false")
@@ -140,6 +249,8 @@ async def train_progress():
         try:
             # Send current state immediately
             yield f"data: {json.dumps(_train_state)}\n\n"
+            if _train_state.get("status") != "running":
+                return
             while True:
                 try:
                     data = await asyncio.wait_for(queue.get(), timeout=30)
@@ -164,182 +275,109 @@ async def train_model(
     product_name: str = Form("product"),
 ):
     """Accept good product images, train PatchCore in background."""
-    global _train_state
-
     if _train_state.get("status") == "running":
         raise HTTPException(409, "Training already in progress.")
 
-    if len(files) < 5:
-        raise HTTPException(400, f"Upload at least 5 images (got {len(files)}).")
+    if len(files) < ml.MIN_IMAGES:
+        raise HTTPException(400, f"Upload at least {ml.MIN_IMAGES} images (got {len(files)}).")
 
     # Clear train temp
     if TRAIN_DIR.exists():
         shutil.rmtree(TRAIN_DIR)
     TRAIN_DIR.mkdir(parents=True, exist_ok=True)
 
-    saved = 0
+    saved, skipped = 0, []
     for f in files:
-        ext = Path(f.filename).suffix.lower()
-        if ext not in {".jpg", ".jpeg", ".png", ".bmp", ".webp"}:
+        try:
+            data, ext = await read_image_upload(f)
+        except ValueError as e:
+            skipped.append({"filename": f.filename, "reason": str(e)})
             continue
-        dest = TRAIN_DIR / f"{uuid.uuid4().hex}{ext}"
-        dest.write_bytes(await f.read())
+        (TRAIN_DIR / f"{uuid.uuid4().hex}{ext}").write_bytes(data)
         saved += 1
 
-    if saved < 5:
-        raise HTTPException(400, "Not enough valid image files.")
+    if saved < ml.MIN_IMAGES:
+        raise HTTPException(400, f"Not enough valid image files ({saved} valid, need {ml.MIN_IMAGES}).")
 
-    # Launch background training
+    await _set_train_state({"status": "running", "progress": 5, "message": f"Saved {saved} images…"})
     asyncio.create_task(_run_training(product_name, saved))
-    _train_state = {"status": "running", "progress": 5, "message": f"Saving {saved} images…"}
-    await _broadcast_train_event(_train_state)
 
-    return {"status": "started", "image_count": saved, "product_name": product_name}
+    return {"status": "started", "image_count": saved, "skipped": skipped, "product_name": product_name}
 
 
 async def _run_training(product_name: str, image_count: int):
-    global _train_state
+    loop = asyncio.get_running_loop()
 
-    async def update(progress: int, message: str):
-        _train_state = {"status": "running", "progress": progress, "message": message}
-        await _broadcast_train_event(_train_state)
-
-    try:
-        await update(10, "Loading model architecture…")
-        await asyncio.sleep(0.5)
-
-        loop = asyncio.get_event_loop()
-        await update(20, "Extracting deep features…")
-
-        from ml.model import train
-        result = await loop.run_in_executor(
-            None, lambda: train(TRAIN_DIR, product_name=product_name)
+    def progress(pct: int, message: str):
+        # called from the worker thread
+        asyncio.run_coroutine_threadsafe(
+            _set_train_state({"status": "running", "progress": pct, "message": message}), loop
         )
 
-        await update(90, "Saving model checkpoint…")
-        await asyncio.sleep(0.3)
+    try:
+        result = await run_in_threadpool(ml.train, TRAIN_DIR, product_name, progress)
 
         db.set_config("model_trained", "true")
         db.set_config("product_name", product_name)
         db.set_config("trained_at", datetime.now().isoformat())
         db.set_config("train_image_count", str(result["image_count"]))
 
-        _train_state = {
+        await _set_train_state({
             "status": "done",
             "progress": 100,
             "message": f"✅ Trained on {result['image_count']} images.",
             "image_count": result["image_count"],
-        }
-        await _broadcast_train_event(_train_state)
+        })
 
     except Exception as e:
         logger.exception("Training failed")
-        _train_state = {"status": "error", "progress": 0, "message": str(e)}
-        await _broadcast_train_event(_train_state)
+        await _set_train_state({"status": "error", "progress": 0, "message": str(e)})
+    finally:
+        shutil.rmtree(TRAIN_DIR, ignore_errors=True)
+        TRAIN_DIR.mkdir(parents=True, exist_ok=True)
 
 
 # ─── Inspect (single) ─────────────────────────────────────────────────────────
 @app.post("/inspect")
 async def inspect_image(file: UploadFile = File(...)):
     """Inspect a single image. Returns score, result, heatmap URL."""
-    trained = db.get_config("model_trained") == "true"
-    if not trained:
+    if not model_is_trained():
         raise HTTPException(400, "Model not trained yet. Go to Train first.")
 
-    ext = Path(file.filename).suffix.lower() or ".jpg"
-    uid = uuid.uuid4().hex
-    image_path = UPLOADS_DIR / f"{uid}{ext}"
-    image_path.write_bytes(await file.read())
-
-    threshold = float(db.get_config("threshold") or 0.5)
-
     try:
-        from ml.model import inspect
-        result = inspect(image_path, threshold)
+        payload = await run_inspection(file)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     except Exception as e:
         logger.exception("Inspection failed")
         raise HTTPException(500, f"Inspection failed: {e}")
 
-    heatmap_url = None
-    if result.get("heatmap_path"):
-        heatmap_name = Path(result["heatmap_path"]).name
-        heatmap_url = f"/results/{heatmap_name}"
-
-    log_id = db.log_inspection(
-        image_path=str(image_path),
-        heatmap_path=result.get("heatmap_path", ""),
-        score=result["score"],
-        confidence=result["confidence"],
-        result=result["result"],
-        threshold=threshold,
-        filename=file.filename,
-    )
-
-    return {
-        "id": log_id,
-        "score": result["score"],
-        "confidence": result["confidence"],
-        "result": result["result"],
-        "threshold": threshold,
-        "heatmap_url": heatmap_url,
-        "image_url": f"/uploads/{uid}{ext}",
-        "filename": file.filename,
-        "timestamp": datetime.now().isoformat(),
-    }
+    prune_storage()
+    return payload
 
 
 # ─── Batch Inspect ────────────────────────────────────────────────────────────
 @app.post("/inspect/batch")
 async def batch_inspect(files: List[UploadFile] = File(...)):
     """Inspect multiple images at once."""
-    trained = db.get_config("model_trained") == "true"
-    if not trained:
+    if not model_is_trained():
         raise HTTPException(400, "Model not trained yet.")
 
-    threshold = float(db.get_config("threshold") or 0.5)
     results = []
-
     for file in files:
         try:
-            ext = Path(file.filename).suffix.lower() or ".jpg"
-            uid = uuid.uuid4().hex
-            image_path = UPLOADS_DIR / f"{uid}{ext}"
-            image_path.write_bytes(await file.read())
-
-            from ml.model import inspect
-            r = inspect(image_path, threshold)
-
-            heatmap_url = None
-            if r.get("heatmap_path"):
-                heatmap_url = f"/results/{Path(r['heatmap_path']).name}"
-
-            log_id = db.log_inspection(
-                image_path=str(image_path),
-                heatmap_path=r.get("heatmap_path", ""),
-                score=r["score"],
-                confidence=r["confidence"],
-                result=r["result"],
-                threshold=threshold,
-                filename=file.filename,
-            )
-            results.append({
-                "id": log_id,
-                "filename": file.filename,
-                "score": r["score"],
-                "confidence": r["confidence"],
-                "result": r["result"],
-                "threshold": threshold,
-                "heatmap_url": heatmap_url,
-                "image_url": f"/uploads/{uid}{ext}",
-                "error": None,
-            })
+            r = await run_inspection(file)
+            results.append({**r, "error": None})
         except Exception as e:
+            if not isinstance(e, ValueError):
+                logger.exception(f"Inspection failed for {file.filename}")
             results.append({
                 "filename": file.filename,
                 "error": str(e),
                 "result": "ERROR",
             })
 
+    prune_storage()
     total   = len(results)
     passed  = sum(1 for r in results if r.get("result") == "PASS")
     failed  = sum(1 for r in results if r.get("result") == "FAIL")
@@ -354,21 +392,26 @@ def history(
     page: int = Query(1, ge=1),
 ):
     rows = db.get_history(limit=limit, result_filter=result_filter, page=page)
-    total = db.get_total_inspections()
+    total = db.get_total_inspections(result_filter=result_filter)
     return {"inspections": rows, "total": total, "page": page, "limit": limit}
 
 
 @app.delete("/history/{inspection_id}")
 def delete_inspection(inspection_id: int):
-    deleted = db.delete_inspection(inspection_id)
-    if not deleted:
+    paths = db.delete_inspection(inspection_id)
+    if paths is None:
         raise HTTPException(404, "Inspection not found.")
+    remove_files(*paths)
     return {"deleted": True, "id": inspection_id}
 
 
 @app.delete("/history")
 def clear_history():
     count = db.clear_history()
+    for d in (UPLOADS_DIR, RESULTS_DIR):
+        for f in d.iterdir():
+            if f.is_file():
+                f.unlink(missing_ok=True)
     return {"cleared": count}
 
 
@@ -386,7 +429,7 @@ _ws_clients: list[WebSocket] = []
 
 @app.websocket("/ws/live")
 async def websocket_live(ws: WebSocket):
-    """Push latest inspection result to all connected clients."""
+    """Push every new inspection result to all connected clients."""
     await ws.accept()
     _ws_clients.append(ws)
     logger.info(f"WS client connected. Total: {len(_ws_clients)}")
@@ -394,16 +437,20 @@ async def websocket_live(ws: WebSocket):
         while True:
             await ws.receive_text()  # keep-alive ping
     except WebSocketDisconnect:
-        _ws_clients.remove(ws)
+        pass
+    finally:
+        if ws in _ws_clients:
+            _ws_clients.remove(ws)
         logger.info(f"WS client disconnected. Total: {len(_ws_clients)}")
 
 
 async def broadcast_inspection(data: dict):
     dead = []
-    for ws in _ws_clients:
+    for ws in list(_ws_clients):
         try:
             await ws.send_json(data)
         except Exception:
             dead.append(ws)
     for ws in dead:
-        _ws_clients.remove(ws)
+        if ws in _ws_clients:
+            _ws_clients.remove(ws)
