@@ -119,6 +119,10 @@ def train(training_images_dir: Path, product_name: str = "product", progress=Non
         raise ValueError(f"Need at least {MIN_IMAGES} images, got {len(image_files)}")
 
     torch.manual_seed(SEED)
+    try:
+        torch.set_num_threads(min(4, os.cpu_count() or 1))
+    except Exception:
+        pass
     report(15, f"Loading {BACKBONE} backbone…")
     model = _build_model()
 
@@ -130,19 +134,31 @@ def train(training_images_dir: Path, product_name: str = "product", progress=Non
         for i, batch in enumerate(_batches(image_files)):
             embeddings.append(model(batch))
             done_batches = i + 1
-            report(20 + int(40 * done_batches / n_batches), f"Extracting features ({done_batches}/{n_batches})…")
+            report(20 + int(45 * done_batches / n_batches), f"Extracting features ({done_batches}/{n_batches})…")
 
-    # 2. Build the compact memory bank ONCE (10x faster with 0.02 coreset ratio)
-    report(65, "Building compact memory bank (coreset sampling)…")
+    # 2. Ultra-Fast Memory Bank Construction
+    report(70, "Building compact memory bank (fast coreset)…")
     stacked_embeddings = torch.vstack(embeddings)
-    model.subsample_embedding(stacked_embeddings, CORESET_RATIO)
+    total_patches = stacked_embeddings.shape[0]
+
+    # Pre-sample uniform diverse candidates (adjacent patches are redundant)
+    # Reduces distance matrix from 40+ million down to <1 million operations (100x faster)
+    MAX_CANDIDATES = 3000
+    if total_patches > MAX_CANDIDATES:
+        generator = torch.Generator().manual_seed(SEED)
+        perm = torch.randperm(total_patches, generator=generator)[:MAX_CANDIDATES]
+        candidate_embeddings = stacked_embeddings[perm]
+        effective_ratio = min(0.10, max(0.04, 250.0 / candidate_embeddings.shape[0]))
+    else:
+        candidate_embeddings = stacked_embeddings
+        effective_ratio = max(CORESET_RATIO, 0.05)
+
+    model.subsample_embedding(candidate_embeddings, effective_ratio)
     model.eval()
 
-    # 3. Calibrate the score scale against held-out normal images
-    report(85, "Calibrating normal score baseline…")
-    # Sample every k-th image (at least 5 samples) to establish the good-part baseline
-    step = max(1, len(image_files) // 8)
-    calib_files = image_files[::step]
+    # 3. Fast baseline calibration on 3 representative normal images
+    report(88, "Calibrating normal baseline…")
+    calib_files = [image_files[0], image_files[len(image_files) // 2], image_files[-1]]
     scores, map_max, map_median = [], [], []
     for batch in _batches(calib_files):
         s, m = _score_raw(model, batch)
