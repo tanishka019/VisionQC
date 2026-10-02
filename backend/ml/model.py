@@ -2,11 +2,13 @@
 model.py — PatchCore anomaly detection via Anomalib (v3)
 
 Training builds PatchCore's memory bank directly from the uploaded "good"
-images, holding a few of them back to calibrate the score scale:
+images. The score scale is calibrated with k-fold cross-validation: every
+image is scored against a bank built without it, giving one unbiased
+"unseen good part" score per image:
 
     score = 0.5 + 0.5 * (raw - calib_max) / (calib_max - calib_min)   (clamped to [0, 1])
 
-so the most typical held-out good image scores ~0, the most unusual one
+so the most typical good image scores ~0, the most unusual one
 scores 0.5, and the default threshold of 0.5 is a sensible start.
 """
 import os
@@ -36,6 +38,8 @@ BACKBONE       = os.getenv("VISIONQC_BACKBONE", "resnet18")
 LAYERS         = ("layer2", "layer3")
 CORESET_RATIO  = float(os.getenv("VISIONQC_CORESET_RATIO", "0.1"))
 BATCH_SIZE     = int(os.getenv("VISIONQC_BATCH_SIZE", "4"))
+CALIB_FOLDS    = 5
+SEED           = 0
 MIN_IMAGES     = 5
 IMAGENET_MEAN  = (0.485, 0.456, 0.406)
 IMAGENET_STD   = (0.229, 0.224, 0.225)
@@ -98,12 +102,12 @@ def reset_model():
         MODEL_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def split_calibration(paths: list[Path], seed: int = 0) -> tuple[list[Path], list[Path]]:
-    """Hold back ~20% of images (at least 1) for score calibration."""
+def make_folds(paths: list[Path], k: int = CALIB_FOLDS, seed: int = SEED) -> list[list[Path]]:
+    """Split images into `k` disjoint, deterministic folds (each at least 1 image)."""
     paths = sorted(paths)
     random.Random(seed).shuffle(paths)
-    n_calib = max(1, len(paths) // 5)
-    return paths[n_calib:], paths[:n_calib]
+    k = max(2, min(k, len(paths)))
+    return [paths[i::k] for i in range(k)]
 
 
 def train(training_images_dir: Path, product_name: str = "product", progress=None) -> dict:
@@ -120,41 +124,52 @@ def train(training_images_dir: Path, product_name: str = "product", progress=Non
         if progress:
             progress(pct, msg)
 
-    image_files = [f for f in Path(training_images_dir).glob("*") if f.suffix.lower() in IMAGE_EXTS]
+    image_files = sorted(f for f in Path(training_images_dir).glob("*") if f.suffix.lower() in IMAGE_EXTS)
     if len(image_files) < MIN_IMAGES:
         raise ValueError(f"Need at least {MIN_IMAGES} images, got {len(image_files)}")
 
-    bank_files, calib_files = split_calibration(image_files)
+    torch.manual_seed(SEED)  # coreset sampling picks a random start point; keep runs reproducible
+    folds = make_folds(image_files)
     report(15, f"Loading {BACKBONE} backbone…")
     model = _build_model()
 
-    # 1. Extract patch embeddings from the memory-bank images
-    model.train()  # PatchcoreModel returns embeddings in train mode (backbone stays frozen/eval)
-    embeddings = []
-    n_batches = (len(bank_files) + BATCH_SIZE - 1) // BATCH_SIZE
+    # 1. Extract patch embeddings once per image (the backbone is frozen)
+    model.train()  # PatchcoreModel returns embeddings in train mode
+    emb: dict[Path, "torch.Tensor"] = {}
     with torch.no_grad():
-        for i, batch in enumerate(_batches(bank_files)):
-            embeddings.append(model(batch))
-            report(20 + int(45 * (i + 1) / n_batches), f"Extracting features ({i + 1}/{n_batches})…")
+        for i in range(0, len(image_files), BATCH_SIZE):
+            chunk = image_files[i:i + BATCH_SIZE]
+            batch = torch.stack([_to_tensor(Image.open(p)) for p in chunk])
+            for path, e in zip(chunk, torch.chunk(model(batch), len(chunk))):
+                emb[path] = e
+            done = min(i + BATCH_SIZE, len(image_files))
+            report(15 + int(35 * done / len(image_files)), f"Extracting features ({done}/{len(image_files)})…")
 
-    # 2. Coreset subsampling → memory bank
-    report(70, "Building memory bank (coreset sampling)…")
-    model.subsample_embedding(torch.vstack(embeddings), CORESET_RATIO)
-
-    # 3. Calibrate the score scale on held-out good images
-    report(85, f"Calibrating on {len(calib_files)} held-out images…")
+    # 2. Calibrate with cross-validation: score every image against a memory
+    #    bank built WITHOUT it, so the score scale reflects unseen good parts.
     scores, map_max, map_median = [], [], []
-    for batch in _batches(calib_files):
-        s, m = _score_raw(model, batch)
-        scores.extend(s.tolist())
-        map_max.extend(m.max(axis=(1, 2)).tolist())
-        map_median.extend(np.median(m, axis=(1, 2)).tolist())
+    for f, held_out in enumerate(folds):
+        report(50 + int(35 * f / len(folds)), f"Calibrating (fold {f + 1}/{len(folds)})…")
+        held = set(held_out)
+        model.train()
+        model.subsample_embedding(torch.vstack([e for p, e in emb.items() if p not in held]), CORESET_RATIO)
+        for batch in _batches(held_out):
+            s, m = _score_raw(model, batch)
+            scores.extend(s.tolist())
+            map_max.extend(m.max(axis=(1, 2)).tolist())
+            map_median.extend(np.median(m, axis=(1, 2)).tolist())
     calibration = {
         "image_min": float(min(scores)),
         "image_max": float(max(scores)),
         "pixel_typical": float(np.median(map_median)),
         "pixel_max": float(max(map_max)),
     }
+
+    # 3. Final memory bank from ALL images
+    report(88, "Building final memory bank (coreset sampling)…")
+    model.train()
+    model.subsample_embedding(torch.vstack(list(emb.values())), CORESET_RATIO)
+    model.eval()
 
     report(95, "Saving model checkpoint…")
     MODEL_DIR.mkdir(parents=True, exist_ok=True)

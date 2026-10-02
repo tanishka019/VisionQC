@@ -24,12 +24,17 @@ def test_normalise_score_single_calibration_image():
     assert 0.5 < score <= 1.0
 
 
-def test_split_calibration_is_deterministic_and_disjoint():
+def test_make_folds_cover_all_images_once_and_are_deterministic():
     paths = [Path(f"{i}.png") for i in range(12)]
-    bank, calib = ml.split_calibration(paths)
-    assert len(calib) == 2 and len(bank) == 10
-    assert not set(bank) & set(calib)
-    assert ml.split_calibration(list(reversed(paths))) == (bank, calib)
+    folds = ml.make_folds(paths, k=5)
+    assert len(folds) == 5 and all(folds)
+    assert sorted(p for f in folds for p in f) == sorted(paths)
+    assert ml.make_folds(list(reversed(paths)), k=5) == folds
+
+
+def test_make_folds_small_sets():
+    folds = ml.make_folds([Path(f"{i}.png") for i in range(5)], k=5)
+    assert [len(f) for f in folds] == [1] * 5
 
 
 def test_train_rejects_too_few_images(tmp_path):
@@ -62,12 +67,17 @@ def test_train_and_inspect_end_to_end(tmp_path):
     assert ml.CHECKPOINT.exists()
 
     ml._model = None  # force reload from checkpoint
-    good_path, bad_path = tmp_path / "good.png", tmp_path / "bad.png"
-    _part(100).save(good_path)
+    goods = []
+    for seed in range(100, 106):
+        path = tmp_path / f"good_{seed}.png"
+        _part(seed).save(path)
+        goods.append(ml.inspect(path, 0.5))
+    bad_path = tmp_path / "bad.png"
     _part(101, defect=True).save(bad_path)
-    good = ml.inspect(good_path, 0.5)
     bad = ml.inspect(bad_path, 0.5)
-    assert good["result"] == "PASS"
+
+    # Cross-validated calibration keeps false rejects rare, and a clear defect must stand out
+    assert sum(g["result"] == "PASS" for g in goods) >= 5, [g["score"] for g in goods]
     assert bad["result"] == "FAIL"
-    assert bad["score"] > good["score"]
+    assert bad["score"] > max(g["score"] for g in goods)
     assert Path(bad["heatmap_path"]).exists()
