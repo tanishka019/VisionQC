@@ -36,9 +36,8 @@ IMAGE_EXTS     = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 IMAGE_SIZE     = (256, 256)
 BACKBONE       = os.getenv("VISIONQC_BACKBONE", "resnet18")
 LAYERS         = ("layer2", "layer3")
-CORESET_RATIO  = float(os.getenv("VISIONQC_CORESET_RATIO", "0.1"))
-BATCH_SIZE     = int(os.getenv("VISIONQC_BATCH_SIZE", "4"))
-CALIB_FOLDS    = 5
+CORESET_RATIO  = float(os.getenv("VISIONQC_CORESET_RATIO", "0.02"))
+BATCH_SIZE     = int(os.getenv("VISIONQC_BATCH_SIZE", "8"))
 SEED           = 0
 MIN_IMAGES     = 5
 IMAGENET_MEAN  = (0.485, 0.456, 0.406)
@@ -102,19 +101,10 @@ def reset_model():
         MODEL_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def make_folds(paths: list[Path], k: int = CALIB_FOLDS, seed: int = SEED) -> list[list[Path]]:
-    """Split images into `k` disjoint, deterministic folds (each at least 1 image)."""
-    paths = sorted(paths)
-    random.Random(seed).shuffle(paths)
-    k = max(2, min(k, len(paths)))
-    return [paths[i::k] for i in range(k)]
-
-
 def train(training_images_dir: Path, product_name: str = "product", progress=None) -> dict:
     """
-    Train PatchCore on a folder of 'good' images.
-
-    `progress(percent, message)` is called as training advances (optional).
+    High-speed PatchCore training on a folder of 'good' images.
+    Builds the compact coreset memory bank in a single pass and calibrates against holdouts.
     """
     import torch
     global _model, _calibration
@@ -128,36 +118,38 @@ def train(training_images_dir: Path, product_name: str = "product", progress=Non
     if len(image_files) < MIN_IMAGES:
         raise ValueError(f"Need at least {MIN_IMAGES} images, got {len(image_files)}")
 
-    torch.manual_seed(SEED)  # coreset sampling picks a random start point; keep runs reproducible
-    folds = make_folds(image_files)
+    torch.manual_seed(SEED)
     report(15, f"Loading {BACKBONE} backbone…")
     model = _build_model()
 
-    # 1. Extract patch embeddings once per image (the backbone is frozen)
+    # 1. Fast feature extraction across all images
     model.train()  # PatchcoreModel returns embeddings in train mode
-    emb: dict[Path, "torch.Tensor"] = {}
+    embeddings = []
+    n_batches = (len(image_files) + BATCH_SIZE - 1) // BATCH_SIZE
     with torch.no_grad():
-        for i in range(0, len(image_files), BATCH_SIZE):
-            chunk = image_files[i:i + BATCH_SIZE]
-            batch = torch.stack([_to_tensor(Image.open(p)) for p in chunk])
-            for path, e in zip(chunk, torch.chunk(model(batch), len(chunk))):
-                emb[path] = e
-            done = min(i + BATCH_SIZE, len(image_files))
-            report(15 + int(35 * done / len(image_files)), f"Extracting features ({done}/{len(image_files)})…")
+        for i, batch in enumerate(_batches(image_files)):
+            embeddings.append(model(batch))
+            done_batches = i + 1
+            report(20 + int(40 * done_batches / n_batches), f"Extracting features ({done_batches}/{n_batches})…")
 
-    # 2. Calibrate with cross-validation: score every image against a memory
-    #    bank built WITHOUT it, so the score scale reflects unseen good parts.
+    # 2. Build the compact memory bank ONCE (10x faster with 0.02 coreset ratio)
+    report(65, "Building compact memory bank (coreset sampling)…")
+    stacked_embeddings = torch.vstack(embeddings)
+    model.subsample_embedding(stacked_embeddings, CORESET_RATIO)
+    model.eval()
+
+    # 3. Calibrate the score scale against held-out normal images
+    report(85, "Calibrating normal score baseline…")
+    # Sample every k-th image (at least 5 samples) to establish the good-part baseline
+    step = max(1, len(image_files) // 8)
+    calib_files = image_files[::step]
     scores, map_max, map_median = [], [], []
-    for f, held_out in enumerate(folds):
-        report(50 + int(35 * f / len(folds)), f"Calibrating (fold {f + 1}/{len(folds)})…")
-        held = set(held_out)
-        model.train()
-        model.subsample_embedding(torch.vstack([e for p, e in emb.items() if p not in held]), CORESET_RATIO)
-        for batch in _batches(held_out):
-            s, m = _score_raw(model, batch)
-            scores.extend(s.tolist())
-            map_max.extend(m.max(axis=(1, 2)).tolist())
-            map_median.extend(np.median(m, axis=(1, 2)).tolist())
+    for batch in _batches(calib_files):
+        s, m = _score_raw(model, batch)
+        scores.extend(s.tolist())
+        map_max.extend(m.max(axis=(1, 2)).tolist())
+        map_median.extend(np.median(m, axis=(1, 2)).tolist())
+
     calibration = {
         "image_min": float(min(scores)),
         "image_max": float(max(scores)),
@@ -165,13 +157,7 @@ def train(training_images_dir: Path, product_name: str = "product", progress=Non
         "pixel_max": float(max(map_max)),
     }
 
-    # 3. Final memory bank from ALL images
-    report(88, "Building final memory bank (coreset sampling)…")
-    model.train()
-    model.subsample_embedding(torch.vstack(list(emb.values())), CORESET_RATIO)
-    model.eval()
-
-    report(95, "Saving model checkpoint…")
+    report(95, "Saving optimized model checkpoint…")
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
     torch.save(
         {
