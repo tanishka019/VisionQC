@@ -248,9 +248,10 @@ VisionQC is validated against the industry-standard **MVTec Anomaly Detection (M
 
 Developed for the **TechForge Hackathon**:
 
-| Name | Role | GitHub Profile |
-|---|---|---|
-| **Tanishka** | Machine Learning & Full-Stack Development | [@tanishka019](https://github.com/tanishka019) |
+1. **Tanishka Dhanudharmi**
+2. **Anvesha Thakur**
+3. **Lavanya Patil**
+4. **Prarthna Purohit**
 
 ---
 
