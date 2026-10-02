@@ -1,0 +1,10 @@
+# Not needed to build or run the app; keeps Railway uploads small
+images/
+**/node_modules/
+**/venv/
+**/__pycache__/
+backend/uploads/
+backend/results/
+backend/train_temp/
+backend/model_artifacts/
+backend/visionqc.db*

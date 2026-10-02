@@ -11,9 +11,10 @@ RUN pip install --no-cache-dir --extra-index-url https://download.pytorch.org/wh
 
 COPY . .
 
-# Uploads, heatmaps, model and DB live here — mount a volume to keep them
+# Uploads, heatmaps, model and DB live here. Mount a volume at /data to keep
+# them (Railway: attach a Volume in the dashboard; volume instructions in this file are rejected)
 ENV VISIONQC_DATA_DIR=/data
-VOLUME ["/data"]
+RUN mkdir -p /data
 EXPOSE 8000
 # Hosts like Railway/Render inject $PORT; fall back to 8000 locally
 CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]
