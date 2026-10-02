@@ -1,5 +1,5 @@
 """
-model.py — PatchCore anomaly detection via Anomalib
+model.py — PatchCore anomaly detection via Anomalib (v2)
 """
 import os
 import shutil
@@ -10,7 +10,6 @@ from PIL import Image
 
 logger = logging.getLogger("visionqc.model")
 
-# Directories
 BASE_DIR    = Path(__file__).parent.parent
 DATASET_DIR = BASE_DIR / "dataset" / "good"
 RESULTS_DIR = BASE_DIR / "results"
@@ -19,12 +18,11 @@ MODEL_DIR   = BASE_DIR / "model_artifacts"
 RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 MODEL_DIR.mkdir(parents=True, exist_ok=True)
 
-_engine = None   # lazy-loaded Anomalib engine
-_model  = None   # loaded PatchCore model
+_engine = None
+_model  = None
 
 
 def _get_anomalib():
-    """Lazy import to avoid slow startup."""
     from anomalib.models import Patchcore
     from anomalib.engine import Engine
     from anomalib.data import Folder
@@ -32,9 +30,20 @@ def _get_anomalib():
 
 
 def is_trained() -> bool:
-    """Return True if a trained model checkpoint exists."""
     checkpoints = list(MODEL_DIR.rglob("*.ckpt"))
     return len(checkpoints) > 0
+
+
+def reset_model():
+    """Delete all model artifacts and dataset."""
+    global _engine, _model
+    _engine = None
+    _model  = None
+    if MODEL_DIR.exists():
+        shutil.rmtree(MODEL_DIR)
+    MODEL_DIR.mkdir(parents=True, exist_ok=True)
+    if DATASET_DIR.parent.exists():
+        shutil.rmtree(DATASET_DIR.parent)
 
 
 def train(training_images_dir: Path, product_name: str = "product") -> dict:
@@ -51,8 +60,10 @@ def train(training_images_dir: Path, product_name: str = "product") -> dict:
         shutil.rmtree(DATASET_DIR)
     DATASET_DIR.mkdir(parents=True, exist_ok=True)
 
-    image_files = list(training_images_dir.glob("*"))
-    image_files = [f for f in image_files if f.suffix.lower() in {".jpg", ".jpeg", ".png", ".bmp", ".webp"}]
+    image_files = [
+        f for f in training_images_dir.glob("*")
+        if f.suffix.lower() in {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+    ]
 
     if len(image_files) < 5:
         raise ValueError(f"Need at least 5 images, got {len(image_files)}")
@@ -60,7 +71,7 @@ def train(training_images_dir: Path, product_name: str = "product") -> dict:
     for f in image_files:
         shutil.copy(f, DATASET_DIR / f.name)
 
-    logger.info(f"Training PatchCore on {len(image_files)} images…")
+    logger.info(f"Training PatchCore on {len(image_files)} images for '{product_name}'…")
 
     datamodule = Folder(
         name=product_name,
@@ -89,16 +100,16 @@ def train(training_images_dir: Path, product_name: str = "product") -> dict:
     _engine = engine
     _model  = model
 
+    logger.info("Training complete!")
     return {"status": "trained", "image_count": len(image_files)}
 
 
 def _load_model_if_needed():
-    """Load the best checkpoint if not already in memory."""
     global _engine, _model
     if _model is not None:
         return
 
-    Patchcore, Engine, Folder = _get_anomalib()
+    Patchcore, Engine, _ = _get_anomalib()
 
     checkpoints = sorted(MODEL_DIR.rglob("*.ckpt"))
     if not checkpoints:
@@ -107,7 +118,7 @@ def _load_model_if_needed():
     ckpt_path = checkpoints[-1]
     logger.info(f"Loading checkpoint: {ckpt_path}")
 
-    _model = Patchcore.load_from_checkpoint(str(ckpt_path))
+    _model  = Patchcore.load_from_checkpoint(str(ckpt_path))
     _engine = Engine(accelerator="auto", devices=1, logger=False, enable_progress_bar=False)
 
 
@@ -118,42 +129,40 @@ def inspect(image_path: Path, threshold: float) -> dict:
     """
     _load_model_if_needed()
 
-    from anomalib.data.utils import read_image
     import torch
     import torchvision.transforms.functional as TF
 
     img = Image.open(image_path).convert("RGB")
     img_resized = img.resize((256, 256))
 
-    # Convert to tensor
     tensor = TF.to_tensor(img_resized).unsqueeze(0)  # [1, 3, 256, 256]
 
     _model.eval()
     with torch.no_grad():
         output = _model(tensor)
 
-    # anomaly map: [1, 1, H, W] or [1, H, W]
     anomaly_map = output.anomaly_map
     if anomaly_map is not None:
         amap = anomaly_map.squeeze().cpu().numpy()
     else:
         amap = np.zeros((256, 256))
 
-    raw_score = float(output.pred_score.squeeze().cpu().numpy()) if output.pred_score is not None else float(amap.max())
+    raw_score = (
+        float(output.pred_score.squeeze().cpu().numpy())
+        if output.pred_score is not None
+        else float(amap.max())
+    )
 
-    # Normalise score to [0, 1] roughly
-    score = min(max(raw_score, 0.0), 1.0)
-
-    result = "FAIL" if score >= threshold else "PASS"
+    score    = min(max(raw_score, 0.0), 1.0)
+    result   = "FAIL" if score >= threshold else "PASS"
     confidence = round((score if result == "FAIL" else 1 - score) * 100, 1)
 
-    # Generate heatmap image
     heatmap_path = _save_heatmap(image_path, img, amap)
 
     return {
-        "score": round(score, 4),
-        "confidence": confidence,
-        "result": result,
+        "score":        round(score, 4),
+        "confidence":   confidence,
+        "result":       result,
         "heatmap_path": str(heatmap_path),
     }
 
@@ -162,28 +171,22 @@ def _save_heatmap(orig_path: Path, orig_img: Image.Image, amap: np.ndarray) -> P
     """Overlay a jet-colourmap heatmap on the original image and save."""
     import matplotlib
     matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
     import matplotlib.cm as cm
 
     w, h = orig_img.size
 
-    # Normalise amap 0-1
     a_min, a_max = amap.min(), amap.max()
-    if a_max > a_min:
-        norm_map = (amap - a_min) / (a_max - a_min)
-    else:
-        norm_map = amap
+    norm_map = (amap - a_min) / (a_max - a_min) if a_max > a_min else amap
 
-    # Apply jet colormap
-    colormap = cm.get_cmap("jet")
-    heatmap_rgba = colormap(norm_map)                      # H×W×4
-    heatmap_rgb  = (heatmap_rgba[:, :, :3] * 255).astype(np.uint8)
-    heatmap_img  = Image.fromarray(heatmap_rgb).resize((w, h))
+    colormap      = cm.get_cmap("inferno")   # better than jet for professional look
+    heatmap_rgba  = colormap(norm_map)
+    heatmap_rgb   = (heatmap_rgba[:, :, :3] * 255).astype(np.uint8)
+    heatmap_img   = Image.fromarray(heatmap_rgb).resize((w, h))
 
-    # Blend
-    blended = Image.blend(orig_img.convert("RGB"), heatmap_img, alpha=0.45)
+    # Blend original + heatmap
+    blended = Image.blend(orig_img.convert("RGB"), heatmap_img, alpha=0.5)
 
-    stem = orig_path.stem
+    stem     = orig_path.stem
     out_path = RESULTS_DIR / f"heatmap_{stem}.jpg"
-    blended.save(out_path, "JPEG", quality=90)
+    blended.save(out_path, "JPEG", quality=92)
     return out_path

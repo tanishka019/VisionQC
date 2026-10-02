@@ -4,6 +4,8 @@ python-multipart==0.0.9
 pillow==10.3.0
 numpy==1.26.4
 anomalib==1.1.0
+lightning>=2.1.0
 torch==2.3.0
 torchvision==0.18.0
+matplotlib>=3.7.0
 aiofiles==23.2.1
