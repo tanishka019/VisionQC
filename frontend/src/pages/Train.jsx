@@ -90,7 +90,7 @@ export default function Train({ onTrained }) {
           setMessage(data.message || "");
           setStatus("done");
           setFinalMsg(data.message || "Model trained successfully.");
-          onTrained && onTrained();
+          onTrained?.();
           es.close();
         } else if (data.status === "error") {
           setStatus("error");
@@ -140,10 +140,11 @@ export default function Train({ onTrained }) {
     setStatus("training");
     setProgress(5);
     setMessage("Uploading images…");
-    listenSSE();
     try {
       await trainModel(files, productName || "product");
-      // SSE will handle status updates
+      // Subscribe only once the server is in the "running" state, so a stale
+      // "done" from a previous run can't end this one early.
+      listenSSE();
     } catch (err) {
       const msg = err.userMessage || err.message || "Unknown error";
       setStatus("error");
@@ -162,7 +163,7 @@ export default function Train({ onTrained }) {
     if (!confirm("Reset the trained model? This cannot be undone.")) return;
     try {
       await resetModel();
-      onTrained && onTrained();
+      onTrained?.();
       alert("Model reset.");
     } catch { /* noop */ }
   };
