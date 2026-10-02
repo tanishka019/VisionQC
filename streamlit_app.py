@@ -68,16 +68,29 @@ if is_model_ready:
 else:
     st.sidebar.warning("○ Model Status: **Untrained**")
 
-# Threshold Slider
+# Supervisor Live KPI Monitor
+today_kpis = db.get_today_stats()
+st.sidebar.divider()
+st.sidebar.subheader("📈 Today's Production KPIs")
+kpi_c1, kpi_c2 = st.sidebar.columns(2)
+kpi_c1.metric("Inspections", today_kpis["total"])
+kpi_c2.metric("Reject Rate", f"{today_kpis['rejection_rate']}%")
+
+p_c1, p_c2 = st.sidebar.columns(2)
+p_c1.caption(f"✅ Passed: **{today_kpis['passed']}**")
+p_c2.caption(f"❌ Rejected: **{today_kpis['failed']}**")
+
+# Threshold Slider (Supervisor Tunable)
 current_threshold = float(db.get_config("threshold") or "0.5")
-st.sidebar.subheader("Sensitivity Threshold")
+st.sidebar.divider()
+st.sidebar.subheader("⚙️ Supervisor Threshold")
 threshold_val = st.sidebar.slider(
-    "Defect Threshold",
+    "Defect Sensitivity Threshold",
     min_value=0.0,
     max_value=1.0,
     value=current_threshold,
     step=0.01,
-    help="Higher threshold = more lenient (fewer fails). Lower = stricter (more fails)."
+    help="Supervisor control: Anomaly scores above this value will be flagged as FAIL/DEFECT."
 )
 
 if threshold_val != current_threshold:
@@ -85,7 +98,7 @@ if threshold_val != current_threshold:
     st.sidebar.info(f"Threshold updated to {threshold_val:.2f}")
 
 product_name = db.get_config("product_name") or "Product"
-st.sidebar.caption(f"Inspecting item: **{product_name}**")
+st.sidebar.caption(f"Active Product: **{product_name}**")
 
 
 # =====================================================================
@@ -170,59 +183,60 @@ elif nav_choice == "🔍 Inspect Product":
 
         if image_to_inspect is not None:
             st.divider()
-            col_img, col_res = st.columns([1, 1])
+            with st.spinner("Analyzing part with PatchCore anomaly detection..."):
+                with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+                    image_to_inspect.convert("RGB").save(tmp.name, "JPEG", quality=95)
+                    temp_img_path = Path(tmp.name)
 
-            with col_img:
-                st.subheader("Inspected Image")
-                st.image(image_to_inspect, use_container_width=True)
+                try:
+                    result = model.inspect(temp_img_path, threshold=threshold_val)
 
-            with col_res:
-                st.subheader("Analysis & Diagnosis")
-                with st.spinner("Running PatchCore anomaly detection..."):
-                    with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
-                        image_to_inspect.convert("RGB").save(tmp.name, "JPEG", quality=95)
-                        temp_img_path = Path(tmp.name)
+                    # Save inspection record to SQLite
+                    db.log_inspection(
+                        image_path=str(temp_img_path),
+                        heatmap_path=result["heatmap_path"],
+                        score=result["score"],
+                        confidence=result["confidence"],
+                        result=result["result"],
+                        threshold=threshold_val,
+                        filename=source_name,
+                    )
 
-                    try:
-                        result = model.inspect(temp_img_path, threshold=threshold_val)
+                    # Supervisor Top Summary Banner
+                    is_pass = result["result"] == "PASS"
+                    badge_html = f"<div class='status-pass'>✅ PASS (Conforming Product)</div>" if is_pass else f"<div class='status-fail'>❌ DEFECT DETECTED (REJECT)</div>"
+                    st.markdown(badge_html, unsafe_allow_html=True)
 
-                        # Save inspection record to SQLite
-                        db.log_inspection(
-                            image_path=str(temp_img_path),
-                            heatmap_path=result["heatmap_path"],
-                            score=result["score"],
-                            confidence=result["confidence"],
-                            result=result["result"],
-                            threshold=threshold_val,
-                            filename=source_name,
-                        )
+                    m1, m2, m3, m4 = st.columns(4)
+                    with m1:
+                        st.metric("Anomaly Score", f"{result['score']:.3f}")
+                    with m2:
+                        st.metric("Supervisor Threshold", f"{threshold_val:.2f}")
+                    with m3:
+                        delta_val = result['score'] - threshold_val
+                        st.metric("Deviation vs Limit", f"{delta_val:+.3f}", delta_color="inverse")
+                    with m4:
+                        st.metric("Model Confidence", f"{result['confidence']}%")
 
-                        # Display PASS/FAIL badge
-                        is_pass = result["result"] == "PASS"
-                        badge_html = f"<div class='status-pass'>✅ PASS</div>" if is_pass else f"<div class='status-fail'>❌ DEFECT DETECTED (FAIL)</div>"
-                        st.markdown(badge_html, unsafe_allow_html=True)
+                    st.caption(f"Inspection recorded. Current today rejection rate: **{db.get_today_stats()['rejection_rate']}%**")
 
-                        m1, m2 = st.columns(2)
-                        with m1:
-                            st.metric(
-                                label="Anomaly Score",
-                                value=f"{result['score']:.3f}",
-                                delta=f"{result['score'] - threshold_val:+.3f} vs threshold",
-                                delta_color="inverse"
-                            )
-                        with m2:
-                            st.metric(label="Confidence", value=f"{result['confidence']}%")
+                    # Side-by-Side Deviation Visualizer
+                    st.divider()
+                    col_orig, col_heat = st.columns(2)
+                    with col_orig:
+                        st.subheader("📷 Original Product Photo")
+                        st.image(image_to_inspect, caption=f"Source: {source_name}", use_container_width=True)
 
-                        st.progress(min(max(result["score"], 0.0), 1.0))
-                        st.caption(f"Score: {result['score']:.3f} | Threshold: {threshold_val:.2f}")
-
+                    with col_heat:
+                        st.subheader("🔥 Defect Heatmap (Deviation Map)")
                         heatmap_file = Path(result["heatmap_path"])
                         if heatmap_file.exists():
-                            st.subheader("Defect Heatmap Overlay")
-                            st.image(str(heatmap_file), caption="Glowing red/yellow areas indicate anomalous regions", use_container_width=True)
+                            st.image(str(heatmap_file), caption="Red/Yellow highlights show exact anomalous region deviating from normal", use_container_width=True)
+                        else:
+                            st.info("Heatmap not generated.")
 
-                    except Exception as e:
-                        st.error(f"Inference error: {e}")
+                except Exception as e:
+                    st.error(f"Inference error: {e}")
 
 
 # =====================================================================
