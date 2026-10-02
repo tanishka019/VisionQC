@@ -3,9 +3,33 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="VisionQC — AI-powered visual quality inspection for manufacturers. Learns from good product photos and detects defects in real time." />
+    <meta name="description" content="VisionQC — AI-powered visual quality inspection for manufacturers. Learns from good product photos and detects defects in real time using PatchCore deep learning." />
+    <meta name="theme-color" content="#080c14" />
+
+    <!-- Preconnect for Google Fonts with fallback -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap"
+      rel="stylesheet"
+      media="print"
+      onload="this.media='all'"
+    />
+    <!-- Noscript fallback -->
+    <noscript>
+      <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+    </noscript>
+
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏭</text></svg>" />
+
     <title>VisionQC — AI Quality Inspection</title>
+
+    <style>
+      /* Critical path CSS — prevent flash of unstyled content */
+      html { background: #080c14; }
+      body { margin: 0; font-family: 'Inter', system-ui, -apple-system, sans-serif; background: #080c14; }
+      #root { min-height: 100vh; }
+    </style>
   </head>
   <body>
     <div id="root"></div>
