@@ -2,6 +2,7 @@ import os
 import sys
 import shutil
 import tempfile
+import zipfile
 from pathlib import Path
 from datetime import datetime
 import streamlit as st
@@ -241,39 +242,76 @@ elif nav_choice == "🚀 Train Model":
     has_sample_dir = sample_dir.exists() and len(list(sample_dir.glob("*.png"))) >= 5
 
     train_mode = st.radio(
-        "Choose training source",
-        ["📁 Upload My Own Photos", "📦 Use Bundled Sample Photos"] if has_sample_dir else ["📁 Upload My Own Photos"]
+        "Choose how to load training images (Fastest to Custom):",
+        [
+            "⚡ Server Folder (Instant — 0s Upload Time)",
+            "🗜️ Upload Folder as .ZIP (Fastest for Custom Images)",
+            "📁 Drag & Drop Multiple Photos"
+        ] if has_sample_dir else [
+            "🗜️ Upload Folder as .ZIP (Fastest for Custom Images)",
+            "📁 Drag & Drop Multiple Photos"
+        ],
+        index=0
     )
 
-    training_paths = []
+    uploaded_zip = None
+    uploaded_train_files = None
+    sample_count = 20
 
-    if train_mode == "📁 Upload My Own Photos":
+    if train_mode == "⚡ Server Folder (Instant — 0s Upload Time)":
+        st.info("💡 **Best approach**: Images are loaded directly from the server filesystem with zero browser upload delay.")
+        sample_count = st.slider("How many normal photos to train on?", 5, min(50, len(list(sample_dir.glob("*.png")))), 20)
+        st.caption(f"Will learn normal product distribution from {sample_count} sample screw photos in `{sample_dir.name}/`.")
+
+    elif train_mode == "🗜️ Upload Folder as .ZIP (Fastest for Custom Images)":
+        st.info("💡 **Recommended for custom images**: Zip your folder of 15–30 good photos on your PC into a `.zip` file and drop it here. It uploads in 1 single second!")
+        uploaded_zip = st.file_uploader(
+            "Upload zipped folder of good product photos (.zip)",
+            type=["zip"],
+            key="zip_uploader"
+        )
+        if uploaded_zip:
+            st.success(f"Loaded zip archive: `{uploaded_zip.name}` ({uploaded_zip.size / 1024:.1f} KB)")
+
+    elif train_mode == "📁 Drag & Drop Multiple Photos":
         uploaded_train_files = st.file_uploader(
-            "Upload 10–30 Good Product Photos (No defects)",
+            "Upload 10–25 Good Photos (No defects)",
             type=["jpg", "jpeg", "png", "webp"],
-            accept_multiple_files=True
+            accept_multiple_files=True,
+            key="multi_file_uploader"
         )
         if uploaded_train_files:
             st.info(f"Selected {len(uploaded_train_files)} images for training.")
 
-    elif train_mode == "📦 Use Bundled Sample Photos":
-        sample_count = st.slider("How many sample photos to train on?", 10, min(50, len(list(sample_dir.glob("*.png")))), 25)
-        st.caption(f"Will build the PatchCore memory bank from the first {sample_count} sample screw photos.")
-
     if st.button("🚀 Learn Normal (Start Training)"):
         temp_dir = Path(tempfile.mkdtemp())
         try:
-            if train_mode == "📁 Upload My Own Photos":
+            # 1. Populate temp_dir based on chosen mode
+            if train_mode == "⚡ Server Folder (Instant — 0s Upload Time)":
+                samples = sorted(list(sample_dir.glob("*.png")))[:sample_count]
+                for s in samples:
+                    shutil.copy(s, temp_dir / s.name)
+
+            elif train_mode == "🗜️ Upload Folder as .ZIP (Fastest for Custom Images)":
+                if not uploaded_zip:
+                    st.error("Please upload a .zip file containing your product photos first.")
+                    st.stop()
+                with zipfile.ZipFile(uploaded_zip, "r") as z:
+                    for filename in z.namelist():
+                        ext = Path(filename).suffix.lower()
+                        if ext in model.IMAGE_EXTS and not Path(filename).name.startswith("."):
+                            # Extract clean basename to temp_dir
+                            target = temp_dir / Path(filename).name
+                            with z.open(filename) as src, open(target, "wb") as dst:
+                                dst.write(src.read())
+
+            elif train_mode == "📁 Drag & Drop Multiple Photos":
                 if not uploaded_train_files or len(uploaded_train_files) < 5:
-                    st.error("Please provide at least 5 images (20-30 recommended) to train.")
+                    st.error("Please select at least 5 images (15–20 recommended) to train.")
                     st.stop()
                 for uf in uploaded_train_files:
                     img = Image.open(uf)
                     img.convert("RGB").save(temp_dir / uf.name)
-            else:
-                samples = sorted(list(sample_dir.glob("*.png")))[:sample_count]
-                for s in samples:
-                    shutil.copy(s, temp_dir / s.name)
 
             progress_bar = st.progress(0)
             status_text = st.empty()
