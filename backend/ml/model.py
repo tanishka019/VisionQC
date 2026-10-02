@@ -32,10 +32,10 @@ MODEL_DIR.mkdir(parents=True, exist_ok=True)
 
 IMAGE_EXTS     = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 IMAGE_SIZE     = (256, 256)
-BACKBONE       = "wide_resnet50_2"
+BACKBONE       = os.getenv("VISIONQC_BACKBONE", "resnet18")
 LAYERS         = ("layer2", "layer3")
-CORESET_RATIO  = 0.1
-BATCH_SIZE     = 8
+CORESET_RATIO  = float(os.getenv("VISIONQC_CORESET_RATIO", "0.1"))
+BATCH_SIZE     = int(os.getenv("VISIONQC_BATCH_SIZE", "4"))
 MIN_IMAGES     = 5
 IMAGENET_MEAN  = (0.485, 0.456, 0.406)
 IMAGENET_STD   = (0.229, 0.224, 0.225)
@@ -45,11 +45,13 @@ _calibration = None   # {"image_min", "image_max", "pixel_typical", "pixel_max":
 _lock        = threading.Lock()
 
 
-def _build_model():
+def _build_model(backbone: str = None, layers: tuple = None):
     from anomalib.models import Patchcore
+    bb = backbone or BACKBONE
+    ly = layers or LAYERS
     module = Patchcore(
-        backbone=BACKBONE,
-        layers=LAYERS,
+        backbone=bb,
+        layers=ly,
         coreset_sampling_ratio=CORESET_RATIO,
     )
     return module.model
@@ -185,7 +187,10 @@ def _load_model_if_needed():
         raise RuntimeError("No trained model found. Please train first.")
     logger.info(f"Loading checkpoint: {CHECKPOINT}")
     ckpt  = torch.load(CHECKPOINT, map_location="cpu")
-    model = _build_model()
+    cfg = ckpt.get("config", {})
+    saved_bb = cfg.get("backbone", BACKBONE)
+    saved_layers = tuple(cfg.get("layers", LAYERS)) if "layers" in cfg else LAYERS
+    model = _build_model(backbone=saved_bb, layers=saved_layers)
     model.memory_bank = ckpt["memory_bank"]
     model.eval()
     _model, _calibration = model, ckpt["calibration"]

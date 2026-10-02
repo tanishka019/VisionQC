@@ -1,6 +1,8 @@
 # Python
 backend/venv/
 venv/
+.venv/
+.streamlit/
 __pycache__/
 *.pyc
 .pytest_cache/
