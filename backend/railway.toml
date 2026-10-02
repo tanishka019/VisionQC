@@ -1,0 +1,10 @@
+# Railway service config — set the service's Root Directory to /backend
+# and its Config File Path to /backend/railway.toml
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+healthcheckPath = "/health"
+healthcheckTimeout = 300
+restartPolicyType = "ON_FAILURE"

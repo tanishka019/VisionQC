@@ -43,6 +43,19 @@ docker compose up --build
 
 The frontend is served on http://localhost:5173 and the API on http://localhost:8000. Uploads, the trained model and the database are kept in the `visionqc-data` volume.
 
+### Deploying on Railway
+
+Create **two services from this repo**, one per folder:
+
+| Service | Root Directory | Config File Path | Variables |
+|---------|----------------|------------------|-----------|
+| backend | `/backend` | `/backend/railway.toml` | `VISIONQC_CORS_ORIGINS=https://<frontend-domain>` (optional: `VISIONQC_API_KEY`) |
+| frontend | `/frontend` | `/frontend/railway.toml` | `VITE_API_URL=https://<backend-domain>` (and `VITE_API_KEY` if set on the backend) |
+
+- Generate a public domain for each service (Settings → Networking), then put each domain into the other service's variable and redeploy. `VITE_API_URL` is baked in at build time, so changing it needs a rebuild.
+- Attach a **volume mounted at `/data`** to the backend, or the trained model, uploads and history are lost on every redeploy.
+- The backend needs roughly 2 GB of RAM (PyTorch and WideResNet-50). The first training run downloads about 270 MB of weights.
+
 ---
 
 ## 📋 How to Demo (Judge Flow)
