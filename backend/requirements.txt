@@ -18,3 +18,4 @@ requests>=2.31              # imported by anomalib.models
 setuptools<70               # anomalib uses pkg_resources
 huggingface_hub<0.26        # timm 1.0.3 fails with newer hub (needed to fetch backbone weights)
 rich<14                     # anomalib's progress bar breaks on rich 14+
+reportlab>=4.0

@@ -320,7 +320,7 @@ def inspect(image_path: Path, threshold: float) -> dict:
     result    = "FAIL" if score >= threshold else "PASS"
     confidence = round((score if result == "FAIL" else 1 - score) * 100, 1)
 
-    heatmap_path = _save_heatmap(image_path, img, maps[0], calibration, outline=(result == "FAIL"), shape_map=shape_map)
+    heatmap_path = _save_heatmap(image_path, img, maps[0], calibration, outline=(result == "FAIL"), shape_map=shape_map, relative=True)
 
     return {
         "score":        round(score, 4),
@@ -343,6 +343,7 @@ def normalised_map(amap: np.ndarray, calibration: dict) -> np.ndarray:
 # defect rose from ~12% to ~59% and haze on good photos fell ~50x versus the old inferno-opacity drawing.
 HEAT_FLOOR = 0.65
 HEAT_TOP   = 1.30
+RELATIVE_FLOOR = 0.30   # the always-visible heat view starts here (the calibrated defect heat starts at HEAT_FLOOR)
 _HEAT_STOPS = np.array([[232, 71, 43], [255, 125, 30], [255, 205, 50]], dtype=float)   # vermilion → orange → amber
 
 
@@ -359,7 +360,7 @@ def _heat_colours(heat: np.ndarray) -> np.ndarray:
     return np.stack([np.interp(heat, pos, _HEAT_STOPS[:, c]) for c in range(3)], axis=-1)
 
 
-def _save_heatmap(orig_path: Path, orig_img: Image.Image, amap: np.ndarray, calibration: dict, outline: bool = True, shape_map=None) -> Path:
+def _save_heatmap(orig_path: Path, orig_img: Image.Image, amap: np.ndarray, calibration: dict, outline: bool = True, shape_map=None, relative: bool = False) -> Path:
     """Draw the heat over the original photo and save it.
 
     Heat is calibrated against what normal photos look like (see HEAT_FLOOR) and drawn with an opacity that
@@ -372,6 +373,13 @@ def _save_heatmap(orig_path: Path, orig_img: Image.Image, amap: np.ndarray, cali
     heat_small = Image.fromarray((heat_intensity(amap, calibration) * 255).astype(np.uint8))
     heat = np.asarray(heat_small.resize((w, h), Image.BICUBIC), dtype=float) / 255.0
 
+    hard = heat    # the calibrated heat alone decides where the FAIL outline goes
+    if relative:   # always-visible view: how unusual each spot is, even when the part passes (faint = normal)
+        typical, peak = calibration["pixel_typical"], calibration["pixel_max"]
+        x = (amap - typical) / max(peak - typical, 1e-6)
+        x_img = np.asarray(Image.fromarray(x.astype(np.float32)).resize((w, h), Image.BICUBIC))
+        heat = np.maximum(heat, 0.8 * np.clip((x_img - RELATIVE_FLOOR) / (HEAT_TOP - RELATIVE_FLOOR), 0.0, 1.0))
+
     if shape_map is not None:   # bent-part evidence: heat on the part, strongest where the centre line strays
         sm = np.asarray(Image.fromarray(shape_map.astype(np.float32)).resize((w, h), Image.BILINEAR))
         heat = np.maximum(heat, np.clip((sm - HEAT_FLOOR) / (HEAT_TOP - HEAT_FLOOR), 0.0, 1.0))
@@ -380,7 +388,7 @@ def _save_heatmap(orig_path: Path, orig_img: Image.Image, amap: np.ndarray, cali
     alpha = (0.72 * heat ** 0.8)[..., None]          # translucent enough to still see the defect underneath
     out   = base * (1 - alpha) + _heat_colours(heat) * alpha
 
-    region = heat > 0.3
+    region = hard > 0.3
     if outline and region.any():
         k = max(3, (w // 300) | 1)                       # outline thickness grows with the image
         mask = Image.fromarray((region * 255).astype(np.uint8))

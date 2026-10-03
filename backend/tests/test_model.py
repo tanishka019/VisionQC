@@ -78,6 +78,19 @@ def test_clean_photo_is_left_untouched(tmp_path, monkeypatch):
     assert np.abs(out - np.asarray(img).astype(int)).max() <= 6                  # JPEG noise only
 
 
+def test_relative_heat_view_is_visible_without_a_defect(tmp_path, monkeypatch):
+    monkeypatch.setattr(ml, "RESULTS_DIR", tmp_path)
+    img = Image.new("RGB", (600, 450), (200, 170, 100))
+    amap = np.full((45, 60), 10.0)
+    amap[15:30, 20:40] = 10.0 + 10.0 * 0.6          # a warm spot, still inside the normal range
+    base = np.asarray(img).astype(int)
+    plain = np.asarray(Image.open(ml._save_heatmap(tmp_path / "d.png", img, amap, HEAT_CAL))).astype(int)
+    rel   = np.asarray(Image.open(ml._save_heatmap(tmp_path / "e.png", img, amap, HEAT_CAL, relative=True))).astype(int)
+    assert np.abs(plain - base).max() <= 6                                       # calibrated view: nothing to show
+    assert (np.abs(rel - base).max(axis=2) > 10)[200:290, 200:400].any()         # relative view: the spot is drawn
+    assert np.abs(rel - base)[:100].max() <= 6                                   # ...and only there
+
+
 def test_input_size_keeps_the_photos_aspect_ratio(tmp_path, monkeypatch):
     monkeypatch.setattr(ml, "IMAGE_LONG_SIDE", 384)
 

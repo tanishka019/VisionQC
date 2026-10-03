@@ -424,6 +424,21 @@ def stats():
     return {"today": today, "hourly": hourly, "weekly": weekly}
 
 
+@app.get("/report/today.pdf")
+def report_today():
+    """Download today's overview as a PDF."""
+    import daily_report
+    now = datetime.now()
+    pdf = daily_report.build_pdf(
+        db.get_today_stats(), db.get_hourly_stats(), db.get_weekly_stats(), db.get_today_inspections(),
+        {"Product": db.get_config("product_name") or "-", "Backbone": ml.BACKBONE,
+         "Input resolution": f"{ml.IMAGE_LONG_SIDE} px (long side)", "Threshold": db.get_config("threshold") or "0.50"},
+        now,
+    )
+    return StreamingResponse(io.BytesIO(pdf), media_type="application/pdf",
+                             headers={"Content-Disposition": f'attachment; filename="visionqc-report-{now:%Y-%m-%d}.pdf"'})
+
+
 # ─── WebSocket live feed ───────────────────────────────────────────────────────
 _ws_clients: list[WebSocket] = []
 
