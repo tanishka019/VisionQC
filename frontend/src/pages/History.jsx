@@ -1,6 +1,10 @@
-// src/pages/History.jsx — v2
+// src/pages/History.jsx
 import { useEffect, useState, useCallback } from "react";
 import { getHistory, deleteInspection, clearHistory, API_BASE } from "../api";
+import { COLORS } from "../theme";
+import { Icon, PageHead, Segmented, Spinner, Status } from "../ui";
+
+const PAGE = 50;
 
 function fmt(ts) {
   try {
@@ -13,13 +17,11 @@ function fmt(ts) {
 
 function ScoreBar({ value, threshold }) {
   const pct   = Math.min(Math.max(value * 100, 0), 100);
-  const color = value >= threshold ? "var(--danger)" : "var(--success)";
+  const color = value >= threshold ? COLORS.fail : COLORS.pass;
   return (
-    <div className="score-bar-wrap">
-      <div className="score-bar-track" style={{ minWidth: 80 }}>
-        <div className="score-bar-fill" style={{ width: `${pct}%`, background: color }} />
-      </div>
-      <span className="mono" style={{ fontSize: ".78rem", fontWeight: 600, minWidth: 38, color: "var(--text-secondary)" }}>
+    <div className="bar">
+      <span><i style={{ width: `${pct}%`, background: color }} /></span>
+      <span className="mono num" style={{ flex: "none", height: "auto", background: "none", minWidth: 34, fontSize: ".78rem", color: "var(--ink-2)" }}>
         {pct.toFixed(0)}%
       </span>
     </div>
@@ -33,6 +35,7 @@ export default function History() {
   const [search,  setSearch]  = useState("");
   const [total,   setTotal]   = useState(0);
   const [deleting, setDeleting] = useState(null);
+  const [shown,   setShown]   = useState(PAGE);
 
   const refresh = useCallback(() => {
     getHistory(500, filter === "all" ? null : filter)
@@ -82,101 +85,47 @@ export default function History() {
   };
 
   return (
-    <div className="animate-fade-up">
+    <div>
+      <PageHead title="History" sub="Every inspection, newest first." />
 
-      {/* Summary strip */}
       {!loading && rows.length > 0 && (
-        <div className="card mb-4">
-          <div className="card-body" style={{ display: "flex", gap: 28, flexWrap: "wrap", padding: "14px 22px" }}>
-            <div>
-              <div className="section-label">Total Records</div>
-              <div style={{ fontSize: "1.4rem", fontWeight: 800, color: "var(--text)" }}>{total.toLocaleString()}</div>
-            </div>
-            <div style={{ width: 1, background: "var(--border)" }} />
-            <div>
-              <div className="section-label">Showing</div>
-              <div style={{ fontSize: "1.4rem", fontWeight: 800, color: "var(--text)" }}>{filtered.length}</div>
-            </div>
-            <div style={{ width: 1, background: "var(--border)" }} />
-            <div>
-              <div className="section-label">Pass</div>
-              <div style={{ fontSize: "1.4rem", fontWeight: 800, color: "var(--success-light)" }}>{passCount}</div>
-            </div>
-            <div style={{ width: 1, background: "var(--border)" }} />
-            <div>
-              <div className="section-label">Fail</div>
-              <div style={{ fontSize: "1.4rem", fontWeight: 800, color: "var(--danger-light)" }}>{failCount}</div>
-            </div>
-            <div style={{ width: 1, background: "var(--border)" }} />
-            <div>
-              <div className="section-label">Reject Rate</div>
-              <div style={{ fontSize: "1.4rem", fontWeight: 800, color: parseFloat(rateShown) > 20 ? "var(--danger-light)" : "var(--warning)" }}>
-                {rateShown}%
-              </div>
-            </div>
-          </div>
+        <div className="kpis compact" style={{ "--cols": 5 }}>
+          <div className="kpi"><div className="label">Total records</div><div className="kpi-value">{total.toLocaleString()}</div></div>
+          <div className="kpi"><div className="label">Showing</div><div className="kpi-value">{filtered.length}</div></div>
+          <div className="kpi"><div className="label">Pass</div><div className="kpi-value pass">{passCount}</div></div>
+          <div className="kpi"><div className="label">Fail</div><div className={`kpi-value ${failCount > 0 ? "fail" : ""}`}>{failCount}</div></div>
+          <div className="kpi"><div className="label">Reject rate</div><div className={`kpi-value ${parseFloat(rateShown) > 20 ? "fail" : ""}`}>{rateShown}%</div></div>
         </div>
       )}
 
-      {/* Controls */}
-      <div className="history-controls">
-        {/* Filter */}
-        <div className="filter-group">
-          {[
-            { key: "all",  label: "All" },
-            { key: "pass", label: "✓ Pass" },
-            { key: "fail", label: "✕ Fail" },
-          ].map(({ key, label }) => (
-            <button
-              key={key}
-              id={`filter-${key}-btn`}
-              className={`filter-btn${filter === key ? " active" : ""}`}
-              onClick={() => setFilter(key)}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-
-        {/* Search */}
+      <div className="controls-row">
+        <Segmented
+          idPrefix="filter"
+          options={[{ key: "all", label: "All" }, { key: "pass", label: "Pass" }, { key: "fail", label: "Fail" }]}
+          value={filter}
+          onChange={(k) => { setFilter(k); setShown(PAGE); }}
+        />
         <input
           className="input"
-          style={{ maxWidth: 240 }}
-          placeholder="Search by date or filename…"
+          placeholder="Search by date or filename"
           value={search}
-          onChange={(e) => setSearch(e.target.value)}
+          onChange={(e) => { setSearch(e.target.value); setShown(PAGE); }}
         />
-
-        {/* Refresh */}
-        <button className="btn btn-secondary btn-sm" onClick={refresh} style={{ padding: "8px 14px" }}>
-          ↺ Refresh
-        </button>
-
+        <button className="btn btn-secondary" onClick={refresh}><Icon name="refresh" size={14} /> Refresh</button>
         <div style={{ marginLeft: "auto" }}>
           {rows.length > 0 && (
-            <button className="btn btn-danger btn-sm" onClick={handleClear}>
-              🗑 Clear All
-            </button>
+            <button className="btn btn-danger" onClick={handleClear}><Icon name="trash" size={14} /> Clear all</button>
           )}
         </div>
       </div>
 
-      {/* Table */}
       <div className="card">
         {loading ? (
-          <div className="loading-wrap">
-            <div className="spinner" />
-            <span>Loading history…</span>
-          </div>
+          <div className="loading"><Spinner /></div>
         ) : filtered.length === 0 ? (
-          <div className="empty-state">
-            <div className="empty-icon">📋</div>
-            <div className="empty-title">No records found</div>
-            <p className="empty-sub">
-              {rows.length === 0
-                ? "Go to Inspect to start quality checks."
-                : "Try changing the filter or search term."}
-            </p>
+          <div className="empty">
+            <h3>No records</h3>
+            <p>{rows.length === 0 ? "Inspect a part and it will be logged here." : "Try a different filter or search term."}</p>
           </div>
         ) : (
           <div className="table-wrap">
@@ -184,10 +133,10 @@ export default function History() {
               <thead>
                 <tr>
                   <th>#</th>
-                  <th>Timestamp</th>
+                  <th>Time</th>
                   <th>File</th>
                   <th>Result</th>
-                  <th>Anomaly Score</th>
+                  <th>Anomaly score</th>
                   <th>Confidence</th>
                   <th>Threshold</th>
                   <th>Heatmap</th>
@@ -195,68 +144,36 @@ export default function History() {
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((row) => (
+                {filtered.slice(0, shown).map((row) => (
                   <tr key={row.id}>
-                    <td>
-                      <span className="mono text-xs" style={{ color: "var(--text-muted)" }}>
-                        #{row.id}
-                      </span>
-                    </td>
-                    <td>
-                      <span className="text-xs mono" style={{ color: "var(--text-muted)" }}>
-                        {fmt(row.timestamp)}
-                      </span>
-                    </td>
-                    <td>
-                      <span
-                        className="text-xs mono truncate"
-                        title={row.filename}
-                        style={{ maxWidth: 140, display: "block", color: "var(--text-secondary)" }}
-                      >
-                        {row.filename || "—"}
-                      </span>
-                    </td>
-                    <td>
-                      <span className={`badge ${row.result === "PASS" ? "badge-pass" : "badge-fail"}`}>
-                        {row.result === "PASS" ? "✓ " : "✕ "}{row.result}
-                      </span>
-                    </td>
-                    <td style={{ minWidth: 150 }}>
-                      <ScoreBar value={row.anomaly_score} threshold={row.threshold} />
-                    </td>
-                    <td>
-                      <span className="mono" style={{ fontWeight: 600, fontSize: ".85rem" }}>
-                        {row.confidence?.toFixed(1)}%
-                      </span>
-                    </td>
-                    <td>
-                      <span className="mono text-xs" style={{ color: "var(--text-muted)" }}>
-                        {(row.threshold * 100).toFixed(0)}%
-                      </span>
-                    </td>
+                    <td><span className="mono small muted">{row.id}</span></td>
+                    <td><span className="mono small">{fmt(row.timestamp)}</span></td>
+                    <td><span className="mono small truncate" title={row.filename}>{row.filename || "—"}</span></td>
+                    <td><Status result={row.result} /></td>
+                    <td><ScoreBar value={row.anomaly_score} threshold={row.threshold} /></td>
+                    <td><span className="mono num">{row.confidence?.toFixed(1)}%</span></td>
+                    <td><span className="mono small muted num">{(row.threshold * 100).toFixed(0)}%</span></td>
                     <td>
                       {row.heatmap_path ? (
                         <a
                           href={`${API_BASE}/results/${row.heatmap_path.split(/[\\/]/).pop()}`}
                           target="_blank"
                           rel="noreferrer"
-                          className="btn btn-ghost btn-sm"
-                          style={{ padding: "4px 8px", fontSize: ".72rem" }}
+                          className="btn btn-quiet btn-sm"
                         >
                           View
                         </a>
-                      ) : (
-                        <span className="text-xs" style={{ color: "var(--text-muted)" }}>—</span>
-                      )}
+                      ) : <span className="muted">—</span>}
                     </td>
                     <td>
                       <button
-                        className="btn btn-ghost btn-sm"
-                        style={{ padding: "4px 8px", color: "var(--danger-light)", fontSize: ".72rem" }}
+                        className="btn btn-quiet btn-sm"
                         onClick={() => handleDelete(row.id)}
                         disabled={deleting === row.id}
+                        aria-label={`Delete record ${row.id}`}
+                        title="Delete"
                       >
-                        {deleting === row.id ? "…" : "✕"}
+                        {deleting === row.id ? "…" : <Icon name="x" size={14} />}
                       </button>
                     </td>
                   </tr>
@@ -268,9 +185,14 @@ export default function History() {
       </div>
 
       {filtered.length > 0 && (
-        <p className="text-muted mt-3 text-xs">
-          Showing {filtered.length} of {rows.length} records · Auto-refreshes every 20s
-        </p>
+        <div className="small muted" style={{ marginTop: 14, display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+          <span>Showing {Math.min(shown, filtered.length)} of {filtered.length} records</span>
+          {shown < filtered.length && (
+            <button className="btn btn-secondary btn-sm" onClick={() => setShown((n) => n + PAGE)}>
+              Show {Math.min(PAGE, filtered.length - shown)} more
+            </button>
+          )}
+        </div>
       )}
     </div>
   );

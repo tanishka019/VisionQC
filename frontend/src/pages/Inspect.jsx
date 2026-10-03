@@ -1,49 +1,18 @@
-// src/pages/Inspect.jsx — v2
+// src/pages/Inspect.jsx
 import { useRef, useState, useCallback } from "react";
 import Webcam from "react-webcam";
 import { inspectImage, batchInspect, API_BASE } from "../api";
+import { Icon, Frame, Status, PageHead, Segmented, ScoreGauge } from "../ui";
 
-// ─── Score ring ──────────────────────────────────────────────────────────────
-function ScoreRing({ score, threshold }) {
-  const isPass  = score < threshold;
-  const color   = isPass ? "#10b981" : "#ef4444";
-  const pct     = Math.round(score * 100);
-  const r       = 40;
-  const circ    = 2 * Math.PI * r;
-  const dash    = (score * circ).toFixed(2);
-
-  return (
-    <svg width="100" height="100" viewBox="0 0 100 100">
-      <circle cx="50" cy="50" r={r} fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="8" />
-      <circle
-        cx="50" cy="50" r={r}
-        fill="none"
-        stroke={color}
-        strokeWidth="8"
-        strokeDasharray={`${dash} ${circ}`}
-        strokeLinecap="round"
-        transform="rotate(-90 50 50)"
-        style={{ transition: "stroke-dasharray 0.6s cubic-bezier(0.4,0,0.2,1)", filter: `drop-shadow(0 0 6px ${color}88)` }}
-      />
-      <text x="50" y="45" textAnchor="middle" fill={color} fontSize="16" fontWeight="800" fontFamily="monospace">
-        {pct}
-      </text>
-      <text x="50" y="60" textAnchor="middle" fill="#4a5568" fontSize="9" fontFamily="monospace">
-        SCORE
-      </text>
-    </svg>
-  );
-}
-
-// ─── Result Panel ────────────────────────────────────────────────────────────
-function ResultPanel({ result, loading }) {
+// ─── Result: verdict + metrics (right column) ────────────────────────────────
+function ResultSummary({ result, loading }) {
   if (loading) {
     return (
-      <div className="card result-panel">
-        <div className="card-body loading-wrap" style={{ padding: 48 }}>
-          <div className="orbit-spinner" />
-          <p style={{ color: "var(--text-secondary)", fontWeight: 500 }}>Analyzing image…</p>
-          <p className="text-muted text-xs">Running PatchCore inference</p>
+      <div className="card">
+        <div className="empty">
+          <h3>Analysing image</h3>
+          <p>Comparing against what a good part looks like.</p>
+          <div className="busy" />
         </div>
       </div>
     );
@@ -51,104 +20,65 @@ function ResultPanel({ result, loading }) {
 
   if (!result) {
     return (
-      <div className="card result-panel">
-        <div className="empty-state" style={{ padding: 52 }}>
-          <div className="empty-icon">◎</div>
-          <div className="empty-title">Awaiting Inspection</div>
-          <p className="empty-sub">Capture a webcam frame or upload an image to run AI quality inspection.</p>
+      <div className="card">
+        <div className="empty">
+          <Icon name="scan" size={40} />
+          <h3>Awaiting an image</h3>
+          <p>Capture a camera frame or upload a photo to get a PASS / FAIL result.</p>
         </div>
       </div>
     );
   }
 
-  const { score, confidence, result: verdict, threshold, heatmap_url, image_url, filename } = result;
+  const { score, confidence, result: verdict, threshold, filename } = result;
   const isPass = verdict === "PASS";
 
   return (
-    <div className="result-panel animate-fade-up">
-
-      {/* Verdict */}
-      <div className={`verdict-card ${isPass ? "pass" : "fail"}`}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 20 }}>
-          <ScoreRing score={score} threshold={threshold} />
-          <div>
-            <div className="verdict-icon">{isPass ? "✅" : "❌"}</div>
-            <div className={`verdict-label ${isPass ? "pass" : "fail"}`}>{verdict}</div>
-            <div className="verdict-sub">
-              {isPass ? "Meets quality standard" : "Defect detected — reject"}
-            </div>
-          </div>
-        </div>
-        {filename && (
-          <div style={{ textAlign: "center", marginTop: 10 }}>
-            <span className="text-xs mono" style={{ color: "var(--text-muted)", opacity: 0.7 }}>{filename}</span>
-          </div>
-        )}
+    <div className="result-col fade">
+      <div className="card verdict">
+        <div className="label">Verdict</div>
+        <div className={`verdict-word ${isPass ? "pass" : "fail"}`} style={{ marginTop: 10 }}>{verdict}</div>
+        <p className="verdict-sub">{isPass ? "Meets the quality standard." : "Defect detected. Reject this part."}</p>
+        <ScoreGauge score={score} threshold={threshold} />
+        {filename && <p className="verdict-file mono">{filename}</p>}
       </div>
 
-      {/* Metrics */}
-      <div className="card metrics-card">
-        <div className="card-header" style={{ padding: "14px 18px" }}>
-          <span className="card-title">Inspection Metrics</span>
-        </div>
-        <div className="card-body" style={{ padding: 0 }}>
-          <div className="metric-row" style={{ padding: "12px 18px" }}>
-            <span className="metric-label">Anomaly Score</span>
-            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-              <div style={{ width: 80 }}>
-                <div className="score-bar-track">
-                  <div
-                    className="score-bar-fill"
-                    style={{
-                      width: `${score * 100}%`,
-                      background: score >= threshold ? "var(--danger)" : "var(--success)",
-                    }}
-                  />
-                </div>
-              </div>
-              <span className="metric-value mono">{(score * 100).toFixed(1)}%</span>
-            </div>
-          </div>
-          <div className="metric-row" style={{ padding: "12px 18px" }}>
-            <span className="metric-label">Confidence</span>
-            <span className="metric-value" style={{ color: isPass ? "var(--success-light)" : "var(--danger-light)" }}>
-              {confidence.toFixed(1)}%
-            </span>
-          </div>
-          <div className="metric-row" style={{ padding: "12px 18px" }}>
-            <span className="metric-label">Threshold</span>
-            <span className="metric-value mono">{(threshold * 100).toFixed(0)}%</span>
-          </div>
-          <div className="metric-row" style={{ padding: "12px 18px" }}>
-            <span className="metric-label">Verdict</span>
-            <span className={`badge ${isPass ? "badge-pass" : "badge-fail"}`}>{verdict}</span>
-          </div>
+      <div className="card">
+        <div className="card-body">
+          <dl className="rows">
+            <div><dt>Anomaly score</dt><dd className="mono">{(score * 100).toFixed(1)}%</dd></div>
+            <div><dt>Confidence</dt><dd className="mono">{confidence.toFixed(1)}%</dd></div>
+            <div><dt>Threshold</dt><dd className="mono">{(threshold * 100).toFixed(0)}%</dd></div>
+          </dl>
         </div>
       </div>
+    </div>
+  );
+}
 
-      {/* Heatmap */}
-      {heatmap_url && (
-        <div className="card">
-          <div className="card-header" style={{ padding: "14px 18px" }}>
-            <span className="card-title">Deviation Heatmap</span>
-            <span className="text-xs text-muted">Warm areas = anomaly</span>
-          </div>
-          <div className="card-body">
-            <div className="heatmap-grid">
-              {image_url && (
-                <div className="heatmap-img-wrap">
-                  <div className="heatmap-img-label">Original</div>
-                  <img src={`${API_BASE}${image_url}`} alt="Original" loading="lazy" />
-                </div>
-              )}
-              <div className="heatmap-img-wrap">
-                <div className="heatmap-img-label">Heatmap</div>
-                <img src={`${API_BASE}${heatmap_url}`} alt="Heatmap" loading="lazy" />
-              </div>
-            </div>
-          </div>
+// ─── Result: original vs deviation map (left column, under the input) ────────
+function ResultImages({ result }) {
+  const { heatmap_url, image_url } = result;
+  return (
+    <div className="card fade">
+      <div className="card-head">
+        <h2>Deviation map</h2>
+        <span className="small muted hint-sm">Warm areas differ from normal</span>
+      </div>
+      <div className="card-body">
+        <div className="pair">
+          {image_url && (
+            <figure>
+              <figcaption>Original</figcaption>
+              <Frame><img src={`${API_BASE}${image_url}`} alt="Original" loading="lazy" /></Frame>
+            </figure>
+          )}
+          <figure>
+            <figcaption>Heatmap</figcaption>
+            <Frame><img src={`${API_BASE}${heatmap_url}`} alt="Heatmap" loading="lazy" /></Frame>
+          </figure>
         </div>
-      )}
+      </div>
     </div>
   );
 }
@@ -161,26 +91,19 @@ const WEBCAM_CONSTRAINTS = {
 
 // ─── Batch result row ────────────────────────────────────────────────────────
 function BatchResultRow({ item }) {
-  const isPass = item.result === "PASS";
   return (
     <div style={{
-      display: "flex", alignItems: "center", gap: 12, padding: "10px 0",
-      borderBottom: "1px solid var(--border)",
+      display: "flex", alignItems: "center", gap: 14, padding: "10px 0",
+      borderBottom: "1px solid var(--line)",
     }}>
-      <span className={`badge ${isPass ? "badge-pass" : item.result === "ERROR" ? "badge-warning" : "badge-fail"}`}>
-        {item.result}
-      </span>
-      <span className="text-sm mono" style={{ flex: 1, color: "var(--text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+      <span style={{ width: 64 }}><Status result={item.result} /></span>
+      <span className="small mono truncate" style={{ flex: 1, maxWidth: "none", color: "var(--ink-2)" }}>
         {item.filename}
       </span>
       {item.score != null && (
-        <span className="text-xs mono" style={{ color: "var(--text-muted)" }}>
-          {(item.score * 100).toFixed(1)}%
-        </span>
+        <span className="small mono muted">{(item.score * 100).toFixed(1)}%</span>
       )}
-      {item.error && (
-        <span className="text-xs" style={{ color: "var(--danger-light)" }}>{item.error}</span>
-      )}
+      {item.error && <span className="small" style={{ color: "var(--fail)" }}>{item.error}</span>}
     </div>
   );
 }
@@ -254,15 +177,15 @@ export default function Inspect({ modelTrained }) {
   // Not trained guard
   if (!modelTrained) {
     return (
-      <div style={{ maxWidth: 520, margin: "60px auto" }} className="animate-fade-up">
+      <div style={{ maxWidth: 520, margin: "40px auto 0" }}>
         <div className="card">
-          <div className="card-body empty-state" style={{ padding: 52 }}>
-            <div className="empty-icon">⬢</div>
-            <div className="empty-title">No Model Trained</div>
-            <p className="empty-sub">
-              Please go to <strong>Train Model</strong> first and upload 20–30 good product images to teach the AI what "normal" looks like.
+          <div className="empty" style={{ padding: "56px 32px" }}>
+            <Icon name="scan" size={40} />
+            <h3>No model yet</h3>
+            <p>
+              Upload 20–30 photos of good parts on the Train page so VisionQC can learn what &ldquo;normal&rdquo; looks like.
             </p>
-            <a className="btn btn-primary mt-4" href="/train">Go to Train →</a>
+            <a className="btn btn-primary" href="/train">Go to Train <Icon name="arrow" size={15} /></a>
           </div>
         </div>
       </div>
@@ -270,89 +193,68 @@ export default function Inspect({ modelTrained }) {
   }
 
   return (
-    <div className="animate-fade-up">
-      {/* Mode tabs + count */}
-      <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 20, flexWrap: "wrap" }}>
-        <div className="tab-group" style={{ width: "auto" }}>
-          {[
-            { key: "webcam", label: "📷  Webcam" },
-            { key: "upload", label: "🖼️  Upload" },
-            { key: "batch",  label: "📂  Batch" },
-          ].map(({ key, label }) => (
-            <button
-              key={key}
-              className={`tab-btn${mode === key ? " active" : ""}`}
-              onClick={() => { setMode(key); if (key !== "webcam") setCamOn(false); }}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
+    <div>
+      <PageHead title="Inspect" sub="Check a part against the learned normal." />
+
+      <div className="toolbar">
+        <Segmented
+          options={[
+            { key: "webcam", label: "Camera" },
+            { key: "upload", label: "Upload" },
+            { key: "batch",  label: "Batch" },
+          ]}
+          value={mode}
+          onChange={(key) => { setMode(key); if (key !== "webcam") setCamOn(false); }}
+        />
         {inspectCount > 0 && (
-          <span className="badge badge-info">
+          <span className="small muted mono">
             {inspectCount} inspection{inspectCount > 1 ? "s" : ""} this session
           </span>
         )}
       </div>
 
-      <div className="inspect-layout">
-
-        {/* Left: input */}
-        <div>
-          {/* Webcam mode */}
+      <div className="inspect-grid">
+        {/* Input */}
+        <div className="area-input">
           {mode === "webcam" && (
             <div className="card">
-              <div className="card-header">
-                <span className="card-title">Live Camera Feed</span>
-                {camOn && (
-                  <div className="live-indicator" style={{ fontSize: ".65rem" }}>
-                    <span className="live-dot" />STREAMING
-                  </div>
-                )}
-              </div>
+              <div className="card-head"><h2>Camera</h2></div>
               <div className="card-body">
-                <div className="webcam-container">
-                  {camOn ? (
-                    <>
-                      <Webcam
-                        ref={webcamRef}
-                        audio={false}
-                        screenshotFormat="image/jpeg"
-                        screenshotQuality={0.92}
-                        videoConstraints={WEBCAM_CONSTRAINTS}
-                        style={{ width: "100%", height: "100%", objectFit: "cover" }}
-                      />
-                      <div className="scan-line" />
-                      <div className="webcam-overlay-badge">
-                        <span className="live-dot" style={{ width: 5, height: 5 }} />
-                        CAMERA ACTIVE
+                <Frame>
+                  <div className="viewer">
+                    {camOn ? (
+                      <>
+                        <Webcam
+                          ref={webcamRef}
+                          audio={false}
+                          screenshotFormat="image/jpeg"
+                          screenshotQuality={0.92}
+                          videoConstraints={WEBCAM_CONSTRAINTS}
+                          style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                        />
+                        <span className="viewer-tag">LIVE</span>
+                      </>
+                    ) : (
+                      <div className="viewer-idle">
+                        <Icon name="camera" size={32} />
+                        <span>Camera is off</span>
                       </div>
-                    </>
-                  ) : (
-                    <div className="webcam-idle">
-                      <div className="webcam-idle-icon">📷</div>
-                      <p style={{ fontSize: ".85rem", color: "var(--text-muted)" }}>Camera is off</p>
-                    </div>
-                  )}
-                </div>
-                <div className="webcam-controls">
+                    )}
+                  </div>
+                </Frame>
+                <div className="controls">
                   {!camOn ? (
                     <button id="start-camera-btn" className="btn btn-primary" onClick={() => setCamOn(true)}>
-                      ▶ Start Camera
+                      <Icon name="play" size={13} /> Start camera
                     </button>
                   ) : (
                     <>
-                      <button
-                        id="capture-btn"
-                        className="btn btn-primary btn-lg"
-                        onClick={capture}
-                        disabled={loading}
-                      >
-                        {loading ? (
-                          <><span className="spinner-sm" style={{ display:"inline-block",width:16,height:16,border:"2px solid rgba(255,255,255,.2)",borderTopColor:"#fff",borderRadius:"50%",animation:"orbit .8s linear infinite" }}/> Analyzing…</>
-                        ) : "📸 Capture & Inspect"}
+                      <button id="capture-btn" className="btn btn-primary btn-lg" onClick={capture} disabled={loading}>
+                        {loading ? <><span className="spin" /> Analysing</> : "Capture & inspect"}
                       </button>
-                      <button className="btn btn-secondary" onClick={() => setCamOn(false)}>⏹ Stop</button>
+                      <button className="btn btn-secondary btn-lg" onClick={() => setCamOn(false)}>
+                        <Icon name="stop" size={13} /> Stop
+                      </button>
                     </>
                   )}
                 </div>
@@ -360,24 +262,19 @@ export default function Inspect({ modelTrained }) {
             </div>
           )}
 
-          {/* Upload mode */}
           {mode === "upload" && (
             <div className="card">
-              <div className="card-header">
-                <span className="card-title">Upload Product Image</span>
-              </div>
+              <div className="card-head"><h2>Upload a photo</h2></div>
               <div className="card-body">
                 <div
-                  className="file-drop-area"
+                  className="dropzone"
                   onDrop={handleDrop}
                   onDragOver={(e) => e.preventDefault()}
                   onClick={() => fileRef.current?.click()}
                 >
-                  <div style={{ fontSize: "2.5rem", marginBottom: 10 }}>🖼️</div>
-                  <h3 style={{ fontWeight: 700, fontSize: "1rem", marginBottom: 6 }}>
-                    {loading ? "Analyzing…" : "Drop image here or click to browse"}
-                  </h3>
-                  <p className="text-muted text-sm">JPG · PNG · BMP · WebP</p>
+                  <Icon name="upload" size={28} />
+                  <h3>{loading ? "Analysing…" : "Drop an image, or click to browse"}</h3>
+                  <p>JPG · PNG · BMP · WebP</p>
                 </div>
                 <input
                   id="inspect-file-input"
@@ -391,21 +288,20 @@ export default function Inspect({ modelTrained }) {
             </div>
           )}
 
-          {/* Batch mode */}
           {mode === "batch" && (
             <div className="card">
-              <div className="card-header">
-                <span className="card-title">Batch Inspection</span>
-                <span className="text-xs text-muted">Inspect multiple images at once</span>
+              <div className="card-head">
+                <h2>Batch</h2>
+                <span className="small muted hint-sm">Inspect many images at once</span>
               </div>
               <div className="card-body">
                 <div
-                  className="file-drop-area"
+                  className="dropzone"
                   onClick={() => document.getElementById("batch-file-input").click()}
                 >
-                  <div style={{ fontSize: "2.5rem", marginBottom: 10 }}>📂</div>
-                  <h3 style={{ fontWeight: 700, marginBottom: 6 }}>Select multiple images</h3>
-                  <p className="text-muted text-sm">All images inspected in one shot</p>
+                  <Icon name="folder" size={28} />
+                  <h3>{loading ? "Analysing…" : "Select multiple images"}</h3>
+                  <p>Every image is checked in one go</p>
                 </div>
                 <input
                   id="batch-file-input"
@@ -416,18 +312,15 @@ export default function Inspect({ modelTrained }) {
                   onChange={handleBatchUpload}
                 />
 
-                {/* Batch results */}
                 {batchRes && (
-                  <div style={{ marginTop: 20 }}>
-                    <div style={{ display: "flex", gap: 12, marginBottom: 16, flexWrap: "wrap" }}>
-                      <span className="badge badge-info">{batchRes.summary.total} total</span>
-                      <span className="badge badge-pass">{batchRes.summary.passed} passed</span>
-                      <span className="badge badge-fail">{batchRes.summary.failed} failed</span>
+                  <div style={{ marginTop: 24 }}>
+                    <div style={{ display: "flex", gap: 20, marginBottom: 8 }} className="small">
+                      <span><b className="num">{batchRes.summary.total}</b> <span className="muted">total</span></span>
+                      <span style={{ color: "var(--pass)" }}><b className="num">{batchRes.summary.passed}</b> passed</span>
+                      <span style={{ color: "var(--fail)" }}><b className="num">{batchRes.summary.failed}</b> failed</span>
                     </div>
-                    <div style={{ maxHeight: 300, overflowY: "auto" }}>
-                      {batchRes.results.map((item, i) => (
-                        <BatchResultRow key={i} item={item} />
-                      ))}
+                    <div style={{ maxHeight: 320, overflowY: "auto" }}>
+                      {batchRes.results.map((item, i) => <BatchResultRow key={i} item={item} />)}
                     </div>
                   </div>
                 )}
@@ -435,18 +328,21 @@ export default function Inspect({ modelTrained }) {
             </div>
           )}
 
-          {/* Error */}
           {error && (
-            <div className="alert alert-danger">
-              <span>⚠</span>
+            <div className="alert" role="alert">
               <span>{error}</span>
             </div>
           )}
         </div>
 
-        {/* Right: result */}
+        {/* Verdict + metrics */}
         {mode !== "batch" && (
-          <ResultPanel result={result} loading={loading} />
+          <div className="area-side"><ResultSummary result={result} loading={loading} /></div>
+        )}
+
+        {/* Heatmap */}
+        {mode !== "batch" && !loading && result?.heatmap_url && (
+          <div className="area-images"><ResultImages result={result} /></div>
         )}
       </div>
     </div>

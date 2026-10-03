@@ -1,0 +1,11 @@
+# Mirrors the web UI: neutral paper and ink. Colour is reserved for PASS / FAIL (see streamlit_app.py).
+[theme]
+base = "light"
+primaryColor = "#121212"
+backgroundColor = "#f5f5f3"
+secondaryBackgroundColor = "#ffffff"
+textColor = "#121212"
+font = "sans serif"
+
+[browser]
+gatherUsageStats = false

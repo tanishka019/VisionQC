@@ -2,7 +2,7 @@
 backend/venv/
 venv/
 .venv/
-.streamlit/
+.streamlit/secrets.toml
 __pycache__/
 *.pyc
 .pytest_cache/
