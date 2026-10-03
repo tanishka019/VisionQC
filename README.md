@@ -255,3 +255,11 @@ Developed for the **TechForge Hackathon**:
 ## 📄 License
 
 This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
+
+## Measuring accuracy
+
+`python backend/eval/evaluate.py DATA_DIR` trains on `DATA_DIR/train_good/` and tests on `test_good/` and `test_bad/`
+(defect type = file-name prefix). It prints AUROC, the catch rate and false-reject rate at several thresholds, the best
+threshold, and a per-defect breakdown. On MVTec AD "screw" (25 training photos): AUROC 0.86, 81% of defects caught and
+15% of good parts rejected at threshold 0.3. Parts that are one long object on a plain background are automatically
+rotated and cropped to a single pose before scoring (`VISIONQC_ALIGN=0` turns this off).

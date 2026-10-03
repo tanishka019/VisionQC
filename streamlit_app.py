@@ -432,7 +432,7 @@ def show_model_chip(ready: bool, name: str):
 show_model_chip(is_model_ready, product_name)
 
 # Threshold Slider
-current_threshold = float(db.get_config("threshold") or "0.5")
+current_threshold = float(db.get_config("threshold") or "0.25")
 threshold_val = st.sidebar.slider(
     "Detection threshold",
     min_value=0.0,

@@ -143,7 +143,7 @@ async def run_inspection(file: UploadFile) -> dict:
     image_path = UPLOADS_DIR / f"{uid}{ext}"
     image_path.write_bytes(data)
 
-    threshold = float(db.get_config("threshold") or 0.5)
+    threshold = float(db.get_config("threshold") or 0.25)
     result = await run_in_threadpool(ml.inspect, image_path, threshold)
 
     heatmap_url = None
@@ -197,7 +197,7 @@ def health():
 @app.get("/threshold")
 def get_threshold():
     val = db.get_config("threshold")
-    return {"threshold": float(val) if val else 0.5}
+    return {"threshold": float(val) if val else 0.25}
 
 
 class ThresholdBody(BaseModel):
@@ -432,7 +432,7 @@ def report_today():
     pdf = daily_report.build_pdf(
         db.get_today_stats(), db.get_hourly_stats(), db.get_weekly_stats(), db.get_today_inspections(),
         {"Product": db.get_config("product_name") or "-", "Backbone": ml.BACKBONE,
-         "Input resolution": f"{ml.IMAGE_LONG_SIDE} px (long side)", "Threshold": db.get_config("threshold") or "0.50"},
+         "Input resolution": f"{ml.IMAGE_LONG_SIDE} px (long side)", "Threshold": db.get_config("threshold") or "0.25"},
         now,
     )
     return StreamingResponse(io.BytesIO(pdf), media_type="application/pdf",

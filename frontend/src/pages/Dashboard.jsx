@@ -62,7 +62,7 @@ const AXIS = { fontSize: 11, fill: COLORS.ink3 };
 
 export default function Dashboard() {
   const [stats,     setStats]     = useState({ today: {}, hourly: [], weekly: [] });
-  const [threshold, setThreshV]   = useState(0.5);
+  const [threshold, setThreshV]   = useState(0.25);
   const [saving,    setSaving]    = useState(false);
   const [saved,     setSaved]     = useState(false);
   const [loading,   setLoading]   = useState(true);
