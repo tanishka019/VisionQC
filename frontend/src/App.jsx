@@ -21,8 +21,8 @@ function TopBar({ modelTrained, productName }) {
     <header className="topbar">
       <div className="topbar-inner">
         <NavLink to="/" className="brand" aria-label="VisionQC">
-          <Mark />
-          <span>VisionQC</span>
+          <span className="brand-mark"><Mark /></span>
+          <span className="brand-name">VisionQC</span>
         </NavLink>
 
         <nav className="nav">
@@ -41,9 +41,9 @@ function TopBar({ modelTrained, productName }) {
         <div className="model-chip" title={modelTrained ? "A trained model is loaded" : "Train a model to start inspecting"}>
           <span className={`dot${modelTrained ? " on" : ""}`} />
           {modelTrained ? (
-            <span><span className="hide-sm">Model ready · </span><span className="mono">{productName}</span></span>
+            <span className="mono"><span className="hide-sm">READY · </span>{productName}</span>
           ) : (
-            <span>No model</span>
+            <span className="mono">NO MODEL</span>
           )}
         </div>
       </div>

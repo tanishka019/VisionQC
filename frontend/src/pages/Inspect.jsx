@@ -2,7 +2,7 @@
 import { useRef, useState, useCallback } from "react";
 import Webcam from "react-webcam";
 import { inspectImage, batchInspect, API_BASE } from "../api";
-import { Icon, Frame, Status, PageHead, Segmented, ScoreGauge } from "../ui";
+import { Icon, Frame, Status, PageHead, Segmented, TickGauge } from "../ui";
 
 // ─── Result: verdict + metrics (right column) ────────────────────────────────
 function ResultSummary({ result, loading }) {
@@ -34,24 +34,17 @@ function ResultSummary({ result, loading }) {
   const isPass = verdict === "PASS";
 
   return (
-    <div className="result-col fade">
-      <div className="card verdict">
-        <div className="label">Verdict</div>
-        <div className={`verdict-word ${isPass ? "pass" : "fail"}`} style={{ marginTop: 10 }}>{verdict}</div>
-        <p className="verdict-sub">{isPass ? "Meets the quality standard." : "Defect detected. Reject this part."}</p>
-        <ScoreGauge score={score} threshold={threshold} />
-        {filename && <p className="verdict-file mono">{filename}</p>}
+    <div className={`verdict ${isPass ? "pass" : "fail"} fade`}>
+      <div className="label">Verdict</div>
+      <div className="verdict-word">{verdict}</div>
+      <p className="verdict-sub">{isPass ? "Meets the quality standard." : "Defect detected. Reject this part."}</p>
+      <TickGauge score={score} threshold={threshold} />
+      <div className="readings">
+        <div><span className="label">Score</span><b>{(score * 100).toFixed(1)}%</b></div>
+        <div><span className="label">Confidence</span><b>{confidence.toFixed(1)}%</b></div>
+        <div><span className="label">Threshold</span><b>{(threshold * 100).toFixed(0)}%</b></div>
       </div>
-
-      <div className="card">
-        <div className="card-body">
-          <dl className="rows">
-            <div><dt>Anomaly score</dt><dd className="mono">{(score * 100).toFixed(1)}%</dd></div>
-            <div><dt>Confidence</dt><dd className="mono">{confidence.toFixed(1)}%</dd></div>
-            <div><dt>Threshold</dt><dd className="mono">{(threshold * 100).toFixed(0)}%</dd></div>
-          </dl>
-        </div>
-      </div>
+      {filename && <p className="verdict-file mono">{filename}</p>}
     </div>
   );
 }
@@ -60,12 +53,12 @@ function ResultSummary({ result, loading }) {
 function ResultImages({ result }) {
   const { heatmap_url, image_url } = result;
   return (
-    <div className="card fade">
-      <div className="card-head">
+    <div className="panel fade">
+      <div className="panel-head">
         <h2>Deviation map</h2>
         <span className="small muted hint-sm">Warm areas differ from normal</span>
       </div>
-      <div className="card-body">
+      <div>
         <div className="pair">
           {image_url && (
             <figure>
@@ -92,18 +85,15 @@ const WEBCAM_CONSTRAINTS = {
 // ─── Batch result row ────────────────────────────────────────────────────────
 function BatchResultRow({ item }) {
   return (
-    <div style={{
-      display: "flex", alignItems: "center", gap: 14, padding: "10px 0",
-      borderBottom: "1px solid var(--line)",
-    }}>
-      <span style={{ width: 64 }}><Status result={item.result} /></span>
-      <span className="small mono truncate" style={{ flex: 1, maxWidth: "none", color: "var(--ink-2)" }}>
+    <div className="batch-row">
+      <span style={{ width: 70 }}><Status result={item.result} /></span>
+      <span className="small mono truncate" style={{ flex: 1, maxWidth: "none" }}>
         {item.filename}
       </span>
       {item.score != null && (
         <span className="small mono muted">{(item.score * 100).toFixed(1)}%</span>
       )}
-      {item.error && <span className="small" style={{ color: "var(--fail)" }}>{item.error}</span>}
+      {item.error && <span className="small" style={{ color: "#ff6a4d" }}>{item.error}</span>}
     </div>
   );
 }
@@ -217,9 +207,9 @@ export default function Inspect({ modelTrained }) {
         {/* Input */}
         <div className="area-input">
           {mode === "webcam" && (
-            <div className="card">
-              <div className="card-head"><h2>Camera</h2></div>
-              <div className="card-body">
+            <div className="panel">
+              <div className="panel-head"><h2>Camera</h2></div>
+              <div>
                 <Frame>
                   <div className="viewer">
                     {camOn ? (
@@ -244,12 +234,12 @@ export default function Inspect({ modelTrained }) {
                 </Frame>
                 <div className="controls">
                   {!camOn ? (
-                    <button id="start-camera-btn" className="btn btn-primary" onClick={() => setCamOn(true)}>
+                    <button id="start-camera-btn" className="btn btn-lime" onClick={() => setCamOn(true)}>
                       <Icon name="play" size={13} /> Start camera
                     </button>
                   ) : (
                     <>
-                      <button id="capture-btn" className="btn btn-primary btn-lg" onClick={capture} disabled={loading}>
+                      <button id="capture-btn" className="btn btn-lime btn-lg" onClick={capture} disabled={loading}>
                         {loading ? <><span className="spin" /> Analysing</> : "Capture & inspect"}
                       </button>
                       <button className="btn btn-secondary btn-lg" onClick={() => setCamOn(false)}>
@@ -263,9 +253,9 @@ export default function Inspect({ modelTrained }) {
           )}
 
           {mode === "upload" && (
-            <div className="card">
-              <div className="card-head"><h2>Upload a photo</h2></div>
-              <div className="card-body">
+            <div className="panel">
+              <div className="panel-head"><h2>Upload a photo</h2></div>
+              <div>
                 <div
                   className="dropzone"
                   onDrop={handleDrop}
@@ -289,12 +279,12 @@ export default function Inspect({ modelTrained }) {
           )}
 
           {mode === "batch" && (
-            <div className="card">
-              <div className="card-head">
+            <div className="panel">
+              <div className="panel-head">
                 <h2>Batch</h2>
                 <span className="small muted hint-sm">Inspect many images at once</span>
               </div>
-              <div className="card-body">
+              <div>
                 <div
                   className="dropzone"
                   onClick={() => document.getElementById("batch-file-input").click()}
@@ -316,8 +306,8 @@ export default function Inspect({ modelTrained }) {
                   <div style={{ marginTop: 24 }}>
                     <div style={{ display: "flex", gap: 20, marginBottom: 8 }} className="small">
                       <span><b className="num">{batchRes.summary.total}</b> <span className="muted">total</span></span>
-                      <span style={{ color: "var(--pass)" }}><b className="num">{batchRes.summary.passed}</b> passed</span>
-                      <span style={{ color: "var(--fail)" }}><b className="num">{batchRes.summary.failed}</b> failed</span>
+                      <span style={{ color: "var(--lime)" }}><b className="num">{batchRes.summary.passed}</b> passed</span>
+                      <span style={{ color: "#ff6a4d" }}><b className="num">{batchRes.summary.failed}</b> failed</span>
                     </div>
                     <div style={{ maxHeight: 320, overflowY: "auto" }}>
                       {batchRes.results.map((item, i) => <BatchResultRow key={i} item={item} />)}
