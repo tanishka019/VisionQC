@@ -1,63 +1,42 @@
-// src/pages/Train.jsx — v2 with SSE progress
+// src/pages/Train.jsx — with SSE progress
 import { useState, useCallback, useEffect, useRef } from "react";
 import { useDropzone } from "react-dropzone";
 import { trainModel, resetModel, API_BASE } from "../api";
+import { Icon, PageHead } from "../ui";
 
 const MIN_IMAGES  = 5;
 const IDEAL_MIN   = 20;
 
-// ─── Step ───────────────────────────────────────────────────────────────────
-function StepRow({ step }) {
-  const steps = ["Upload Images", "Name Product", "Train Model"];
+// ─── Steps ───────────────────────────────────────────────────────────────────
+function Steps({ step }) {
+  const steps = ["Add good photos", "Name the product", "Learn"];
   return (
-    <div className="steps-row" style={{ padding: "0 4px" }}>
+    <ol className="steps" style={{ listStyle: "none" }}>
       {steps.map((label, i) => {
         const done   = i < step;
         const active = i === step;
         return (
-          <div key={label} className="step-item" style={{ flex: i < 2 ? 1 : "none" }}>
-            <div className={`step-circle ${done ? "done" : active ? "active" : "inactive"}`}>
-              {done ? "✓" : i + 1}
-            </div>
-            <span className="step-label" style={{ color: done || active ? "var(--text-secondary)" : "var(--text-muted)" }}>
-              {label}
-            </span>
-            {i < 2 && <div className={`step-line ${done ? "done" : ""}`} />}
-          </div>
+          <li key={label} className={`step${done ? " done" : active ? " active" : ""}`}>
+            <span className="n">{done ? <Icon name="check" size={13} /> : String(i + 1).padStart(2, "0")}</span>
+            {label}
+          </li>
         );
       })}
-    </div>
+    </ol>
   );
 }
 
-// ─── Progress bar ────────────────────────────────────────────────────────────
+// ─── Progress ────────────────────────────────────────────────────────────────
 function TrainingProgress({ progress, message }) {
   return (
-    <div className="train-progress-card">
-      <div className="orbit-spinner" />
-      <div style={{ textAlign: "center" }}>
-        <h3 style={{ fontWeight: 800, fontSize: "1.1rem", marginBottom: 6 }}>Training PatchCore…</h3>
-        <p className="text-muted" style={{ fontSize: ".85rem", marginBottom: 4 }}>
-          {message || "Processing images…"}
-        </p>
-        <p className="text-muted" style={{ fontSize: ".75rem" }}>
-          Wide-ResNet50 feature extraction + memory bank
-        </p>
+    <div className="card-body" style={{ padding: "36px 28px" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 14 }}>
+        <h2 style={{ fontSize: "1.05rem", fontWeight: 600, letterSpacing: "-0.01em" }}>Learning what normal looks like</h2>
+        <span className="mono num" style={{ fontSize: ".9rem" }}>{progress}%</span>
       </div>
-      <div style={{ width: "100%", maxWidth: 400 }}>
-        <div className="progress-track">
-          <div className="progress-fill" style={{ width: `${progress}%` }} />
-        </div>
-        <div style={{ display: "flex", justifyContent: "space-between", marginTop: 6 }}>
-          <span className="text-xs text-muted">Progress</span>
-          <span className="text-xs mono" style={{ color: "var(--primary-light)", fontWeight: 700 }}>
-            {progress}%
-          </span>
-        </div>
-      </div>
-      <p className="text-muted" style={{ fontSize: ".75rem", textAlign: "center" }}>
-        This may take 1–10 min depending on hardware. Keep this tab open.
-      </p>
+      <div className="progress"><div style={{ width: `${progress}%` }} /></div>
+      <p className="small muted" style={{ marginTop: 14 }}>{message || "Processing images…"}</p>
+      <p className="small muted" style={{ marginTop: 4 }}>Usually under a minute. Keep this tab open.</p>
     </div>
   );
 }
@@ -170,100 +149,84 @@ export default function Train({ onTrained }) {
 
   const count   = files.length;
   const isReady = count >= MIN_IMAGES && status !== "training";
-  const step    = status === "done" ? 3 : count >= MIN_IMAGES ? 1 : 0;
+  const step    = status === "done" ? 3 : status === "training" ? 2 : count >= MIN_IMAGES ? 1 : 0;
 
   return (
-    <div style={{ maxWidth: 900, margin: "0 auto" }} className="animate-fade-up">
+    <div style={{ maxWidth: 820 }}>
+      <PageHead title="Train" sub="Show VisionQC what a good part looks like. No defect photos needed." />
 
-      {/* Steps */}
-      <div className="card mb-4">
-        <div className="card-body" style={{ padding: "18px 24px" }}>
-          <StepRow step={step} />
-        </div>
-      </div>
+      <Steps step={step} />
 
-      {/* Training in progress */}
       {status === "training" && (
-        <div className="card mb-4">
-          <TrainingProgress progress={progress} message={message} />
-        </div>
+        <div className="card gap-y"><TrainingProgress progress={progress} message={message} /></div>
       )}
 
-      {/* Success */}
       {status === "done" && (
-        <div className="card mb-4" style={{ borderColor: "var(--success-border)" }}>
-          <div className="card-body" style={{ textAlign: "center", padding: "40px 32px" }}>
-            <div style={{ fontSize: "3.5rem", marginBottom: 14 }}>🎉</div>
-            <h3 style={{ fontWeight: 900, fontSize: "1.3rem", color: "var(--success-light)", marginBottom: 8 }}>
-              Model Ready!
-            </h3>
-            <p className="text-muted" style={{ marginBottom: 24, fontSize: ".9rem" }}>{finalMsg}</p>
+        <div className="card gap-y">
+          <div className="card-body center" style={{ padding: "44px 28px" }}>
+            <Icon name="check" size={28} style={{ color: "var(--pass)" }} />
+            <h2 style={{ fontSize: "1.3rem", fontWeight: 600, letterSpacing: "-0.02em", margin: "12px 0 6px" }}>Model ready</h2>
+            <p className="muted" style={{ marginBottom: 24 }}>{finalMsg.replace(/^\p{Extended_Pictographic}\uFE0F?\s*/u, "")}</p>
             <div style={{ display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap" }}>
-              <a className="btn btn-primary btn-lg" href="/inspect">Start Inspecting →</a>
-              <button className="btn btn-secondary" onClick={reset}>Train Another Model</button>
-              <button className="btn btn-danger btn-sm" onClick={handleReset}>Reset Model</button>
+              <a className="btn btn-primary btn-lg" href="/inspect">Start inspecting <Icon name="arrow" size={15} /></a>
+              <button className="btn btn-secondary btn-lg" onClick={reset}>Train another</button>
+              <button className="btn btn-danger btn-lg" onClick={handleReset}>Reset model</button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Error */}
       {status === "error" && (
-        <div className="alert alert-danger mb-4">
-          <span>⚠</span>
+        <div className="alert" role="alert">
           <span>{finalMsg}</span>
-          <button className="btn btn-ghost btn-sm" onClick={reset} style={{ marginLeft: "auto" }}>Retry</button>
+          <button className="btn btn-quiet btn-sm" onClick={reset}>Retry</button>
         </div>
       )}
 
-      {/* Form (only when not done/training) */}
       {!["done", "training"].includes(status) && (
         <>
-          {/* Product name */}
-          <div className="card mb-4">
-            <div className="card-header">
-              <span className="card-title">Product Name</span>
-              <span className="text-xs text-muted">Used to label the model</span>
+          <div className="card gap-y">
+            <div className="card-head">
+              <h2>Product name</h2>
+              <span className="small muted hint-sm">Used to label the model</span>
             </div>
             <div className="card-body">
               <input
                 id="product-name-input"
                 className="input"
-                placeholder="e.g. Screw, PCB Board, Gear, Bolt…"
+                placeholder="e.g. Screw, circuit board, gear…"
                 value={productName}
                 onChange={(e) => setProduct(e.target.value)}
               />
             </div>
           </div>
 
-          {/* Dropzone */}
-          <div className="card mb-4">
-            <div className="card-header">
-              <span className="card-title">Good Product Images</span>
-              <span className={`badge ${count >= IDEAL_MIN ? "badge-pass" : count >= MIN_IMAGES ? "badge-info" : "badge-neutral"}`}>
-                {count} / {IDEAL_MIN} recommended
-              </span>
+          <div className="card gap-y">
+            <div className="card-head">
+              <h2>Good product photos</h2>
+              <span className="small mono muted num">{count} / {IDEAL_MIN} recommended</span>
             </div>
             <div className="card-body">
               <div {...getRootProps()} className={`dropzone${isDragActive ? " drag-active" : ""}`}>
                 <input {...getInputProps()} id="image-file-input" />
-                <span className="dropzone-icon">🖼️</span>
-                <h3>{isDragActive ? "Drop images here!" : "Drop images or click to browse"}</h3>
-                <p>Upload <strong>20–30 defect-free</strong> product images for best accuracy</p>
-                <p style={{ fontSize: ".76rem", marginTop: 6, opacity: 0.7 }}>JPG · PNG · BMP · WebP · Max 60 images</p>
+                <Icon name="upload" size={28} />
+                <h3>{isDragActive ? "Drop the photos here" : "Drop photos, or click to browse"}</h3>
+                <p>20–30 photos of defect-free parts work best, taken the same way each time.</p>
+                <p className="small" style={{ marginTop: 6 }}>JPG · PNG · BMP · WebP · up to 60 images</p>
               </div>
 
-              {/* Thumbnails */}
               {files.length > 0 && (
-                <div className="image-preview-grid mt-4">
+                <div className="thumbs">
                   {files.map((f, i) => (
-                    <div key={i} className="image-thumb">
+                    <div key={i} className="thumb">
                       <img src={previews[i]} alt={f.name} loading="lazy" />
                       <button
-                        className="remove-btn"
                         onClick={(e) => { e.stopPropagation(); removeFile(i); }}
                         title="Remove"
-                      >✕</button>
+                        aria-label={`Remove ${f.name}`}
+                      >
+                        <Icon name="x" size={11} strokeWidth={2.4} />
+                      </button>
                     </div>
                   ))}
                 </div>
@@ -271,44 +234,21 @@ export default function Train({ onTrained }) {
             </div>
           </div>
 
-          {/* Train action bar */}
-          <div className="card">
-            <div className="card-body" style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              gap: 16, flexWrap: "wrap", padding: "18px 22px",
-            }}>
-              <div>
+          <div className="card gap-y">
+            <div className="card-body action-bar">
+              <p className="small" style={{ color: "var(--ink-2)" }}>
                 {count < MIN_IMAGES ? (
-                  <p className="text-muted text-sm">
-                    Upload at least <strong style={{ color: "var(--text)" }}>{MIN_IMAGES}</strong> images to begin.
-                    ({MIN_IMAGES - count} more needed)
-                  </p>
+                  <>Add at least <b>{MIN_IMAGES}</b> photos to begin ({MIN_IMAGES - count} more needed).</>
                 ) : count < IDEAL_MIN ? (
-                  <p className="text-muted text-sm">
-                    <strong style={{ color: "var(--warning)" }}>{count}</strong> images ready —
-                    {IDEAL_MIN - count} more would improve accuracy.
-                  </p>
+                  <><b>{count}</b> photos ready. {IDEAL_MIN - count} more would improve accuracy.</>
                 ) : (
-                  <p style={{ color: "var(--success-light)", fontWeight: 600, fontSize: ".9rem" }}>
-                    ✓ {count} images ready — optimal dataset size!
-                  </p>
+                  <><b>{count}</b> photos ready. That&rsquo;s a good size.</>
                 )}
-              </div>
+              </p>
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                {count > 0 && (
-                  <button className="btn btn-secondary" onClick={reset}>
-                    Clear All
-                  </button>
-                )}
-                <button
-                  id="train-btn"
-                  className="btn btn-primary btn-lg"
-                  disabled={!isReady}
-                  onClick={handleTrain}
-                >
-                  ⬢ Train Model
+                {count > 0 && <button className="btn btn-secondary" onClick={reset}>Clear all</button>}
+                <button id="train-btn" className="btn btn-primary btn-lg" disabled={!isReady} onClick={handleTrain}>
+                  Learn normal
                 </button>
               </div>
             </div>
