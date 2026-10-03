@@ -466,7 +466,7 @@ if nav_choice == NAV_OVERVIEW:
         st.markdown(
             rows_html([
                 ("Backbone", model.BACKBONE),
-                ("Image resolution", f"{model.IMAGE_SIZE[0]}x{model.IMAGE_SIZE[1]}"),
+                ("Input resolution", f"{model.IMAGE_LONG_SIDE} px (long side)"),
                 ("Product", product_name),
                 ("Threshold", f"{threshold_val:.2f}"),
                 ("Avg confidence", f"{stats['avg_confidence']}%" if stats["total"] else "-"),

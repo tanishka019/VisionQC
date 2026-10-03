@@ -37,6 +37,65 @@ def test_make_folds_small_sets():
     assert [len(f) for f in folds] == [1] * 5
 
 
+HEAT_CAL = {"image_min": 10.0, "image_max": 20.0, "pixel_typical": 10.0, "pixel_max": 20.0}
+
+
+def test_heat_is_transparent_for_normal_texture():
+    # at/below the hottest pixel seen on good photos nothing may be drawn
+    assert ml.heat_intensity(np.full((8, 8), 10.0), HEAT_CAL).max() == 0.0
+    assert ml.heat_intensity(np.full((8, 8), 10.0 + 10.0 * 0.5), HEAT_CAL).max() == 0.0
+    assert ml.heat_intensity(np.full((8, 8), 20.0), HEAT_CAL).max() < 0.6
+
+
+def test_heat_grows_with_how_unusual_a_region_is():
+    mild = ml.heat_intensity(np.full((4, 4), 10.0 + 10.0 * 0.9), HEAT_CAL).mean()
+    strong = ml.heat_intensity(np.full((4, 4), 10.0 + 10.0 * 1.4), HEAT_CAL).mean()
+    assert 0.0 < mild < strong <= 1.0
+
+
+def test_outline_is_drawn_only_when_requested(tmp_path, monkeypatch):
+    monkeypatch.setattr(ml, "RESULTS_DIR", tmp_path)
+    img = Image.new("RGB", (600, 450), (200, 170, 100))
+    amap = np.full((45, 60), 10.0)
+    amap[15:30, 20:40] = 10.0 + 10.0 * 1.4          # one clearly hot region
+    with_outline = np.asarray(Image.open(ml._save_heatmap(tmp_path / "a.png", img, amap, HEAT_CAL, outline=True))).astype(int)
+    no_outline   = np.asarray(Image.open(ml._save_heatmap(tmp_path / "b.png", img, amap, HEAT_CAL, outline=False))).astype(int)
+    base = np.asarray(img).astype(int)
+
+    assert with_outline.shape == no_outline.shape == (450, 600, 3)
+    assert (np.abs(with_outline - no_outline).max(axis=2) > 30).sum() > 100     # the outline itself
+    assert (np.abs(no_outline - base).max(axis=2) > 30)[200:290, 200:400].any()  # the heat fill, on the hot region
+    assert np.abs(no_outline - base)[:100].max() <= 6                            # ...and nowhere else
+
+
+def test_clean_photo_is_left_untouched(tmp_path, monkeypatch):
+    monkeypatch.setattr(ml, "RESULTS_DIR", tmp_path)
+    img = Image.new("RGB", (600, 450), (200, 170, 100))
+    out = np.asarray(Image.open(ml._save_heatmap(tmp_path / "c.png", img, np.full((45, 60), 10.0), HEAT_CAL, outline=True))).astype(int)
+    assert np.abs(out - np.asarray(img).astype(int)).max() <= 6                  # JPEG noise only
+
+
+def test_input_size_keeps_the_photos_aspect_ratio(tmp_path, monkeypatch):
+    monkeypatch.setattr(ml, "IMAGE_LONG_SIDE", 384)
+
+    def photos(size):
+        paths = []
+        for i in range(3):
+            p = tmp_path / f"{size[0]}x{size[1]}_{i}.png"
+            Image.new("RGB", size).save(p)
+            paths.append(p)
+        return paths
+
+    monkeypatch.setattr(ml, "FIT_ASPECT", True)
+    assert ml.choose_input_size(photos((1920, 1440))) == (384, 288)    # landscape 4:3
+    assert ml.choose_input_size(photos((1000, 1500))) == (256, 384)    # portrait 2:3
+    w, h = ml.choose_input_size(photos((640, 480)))
+    assert w % 16 == 0 and h % 16 == 0                                  # matches the backbone strides
+
+    monkeypatch.setattr(ml, "FIT_ASPECT", False)
+    assert ml.choose_input_size(photos((1920, 1440))) == (384, 384)    # opt-out: square
+
+
 def test_train_rejects_too_few_images(tmp_path):
     for i in range(3):
         Image.new("RGB", (32, 32)).save(tmp_path / f"{i}.png")

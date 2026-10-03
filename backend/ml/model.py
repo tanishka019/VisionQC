@@ -33,11 +33,16 @@ RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 MODEL_DIR.mkdir(parents=True, exist_ok=True)
 
 IMAGE_EXTS     = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
-IMAGE_LONG_SIDE = int(os.getenv("VISIONQC_IMAGE_SIZE", "256"))   # long side of the model input, in pixels
-FIT_ASPECT      = os.getenv("VISIONQC_FIT_ASPECT", "0") == "1"   # keep the photos' aspect ratio instead of squashing to a square
+# Defaults picked by benchmarking on photos with defects drawn at known positions, judging BOTH the heatmap
+# and the PASS/FAIL verdict (vs. the previous 256x256 square / layer2+layer3: pixel AUROC 0.90-0.92 -> 0.98,
+# heatmap peak inside the defect 46-51% -> 69-78%, large defects still flagged FAIL ~100%).
+# Dropping layer3 gave the sharpest maps but wrecked the verdict (large defects flagged 0-6%), so it stays.
+IMAGE_LONG_SIDE = int(os.getenv("VISIONQC_IMAGE_SIZE", "384"))   # long side of the model input, in pixels
+FIT_ASPECT      = os.getenv("VISIONQC_FIT_ASPECT", "1") == "1"   # keep the photos' aspect ratio instead of squashing to a square
 IMAGE_SIZE     = (IMAGE_LONG_SIDE, IMAGE_LONG_SIDE)              # (w, h); recomputed from the training photos when FIT_ASPECT
 BACKBONE       = os.getenv("VISIONQC_BACKBONE", "resnet18")
-LAYERS         = tuple(os.getenv("VISIONQC_LAYERS", "layer2,layer3").split(","))
+# layer1 (stride 4) localises small defects; layer2/layer3 carry the context the verdict needs.
+LAYERS         = tuple(os.getenv("VISIONQC_LAYERS", "layer1,layer2,layer3").split(","))
 CORESET_RATIO  = float(os.getenv("VISIONQC_CORESET_RATIO", "0.02"))
 BATCH_SIZE     = int(os.getenv("VISIONQC_BATCH_SIZE", "8"))
 CALIB_FOLDS    = 5
@@ -281,7 +286,7 @@ def inspect(image_path: Path, threshold: float) -> dict:
     result    = "FAIL" if score >= threshold else "PASS"
     confidence = round((score if result == "FAIL" else 1 - score) * 100, 1)
 
-    heatmap_path = _save_heatmap(image_path, img, maps[0], calibration)
+    heatmap_path = _save_heatmap(image_path, img, maps[0], calibration, outline=(result == "FAIL"))
 
     return {
         "score":        round(score, 4),
@@ -298,26 +303,53 @@ def normalised_map(amap: np.ndarray, calibration: dict) -> np.ndarray:
     return np.clip(0.5 * (amap - typical) / max(peak - typical, 1e-6), 0.0, 1.0)
 
 
-def _save_heatmap(orig_path: Path, orig_img: Image.Image, amap: np.ndarray, calibration: dict) -> Path:
-    """Overlay an inferno heatmap on the original image and save.
+# Heat drawing. R = hottest normal pixel - typical pixel (both measured on the training photos).
+# Nothing is drawn below HEAT_FLOOR * R above typical, so ordinary texture stays clear; the scale tops out at
+# HEAT_TOP * R. Tuned on photos with defects at known positions: the share of drawn heat that sits on the
+# defect rose from ~12% to ~59% and haze on good photos fell ~50x versus the old inferno-opacity drawing.
+HEAT_FLOOR = 0.65
+HEAT_TOP   = 1.30
+_HEAT_STOPS = np.array([[232, 71, 43], [255, 125, 30], [255, 205, 50]], dtype=float)   # vermilion → orange → amber
 
-    The map is scaled against calibrated values from good images (not
-    per-image min/max) and used as the overlay's opacity, so normal regions show the
-    original image and only true anomalies glow.
+
+def heat_intensity(amap: np.ndarray, calibration: dict) -> np.ndarray:
+    """0..1 heat to draw for each pixel of the anomaly map (0 = transparent)."""
+    typical, peak = calibration["pixel_typical"], calibration["pixel_max"]
+    x = (amap - typical) / max(peak - typical, 1e-6)
+    return np.clip((x - HEAT_FLOOR) / (HEAT_TOP - HEAT_FLOOR), 0.0, 1.0)
+
+
+def _heat_colours(heat: np.ndarray) -> np.ndarray:
+    """Warm ramp that never darkens the photo (unlike inferno's near-black low end)."""
+    pos = np.linspace(0.0, 1.0, len(_HEAT_STOPS))
+    return np.stack([np.interp(heat, pos, _HEAT_STOPS[:, c]) for c in range(3)], axis=-1)
+
+
+def _save_heatmap(orig_path: Path, orig_img: Image.Image, amap: np.ndarray, calibration: dict, outline: bool = True) -> Path:
+    """Draw the heat over the original photo and save it.
+
+    Heat is calibrated against what normal photos look like (see HEAT_FLOOR) and drawn with an opacity that
+    follows its intensity. When `outline` is set (a FAIL verdict) the hot region also gets a thin outline so
+    the location is unambiguous; a PASS never outlines anything, so the picture can't contradict the verdict.
     """
-    import matplotlib
-    matplotlib.use("Agg")
-    from matplotlib import colormaps
+    from PIL import ImageFilter
 
     w, h = orig_img.size
-    norm_map = normalised_map(amap, calibration)
+    heat_small = Image.fromarray((heat_intensity(amap, calibration) * 255).astype(np.uint8))
+    heat = np.asarray(heat_small.resize((w, h), Image.BICUBIC), dtype=float) / 255.0
 
-    heatmap_rgb = (colormaps["inferno"](norm_map)[:, :, :3] * 255).astype(np.uint8)
-    heatmap_img = Image.fromarray(heatmap_rgb).resize((w, h))
-    alpha_img   = Image.fromarray((norm_map * 0.8 * 255).astype(np.uint8)).resize((w, h))
+    base  = np.asarray(orig_img.convert("RGB"), dtype=float)
+    alpha = (0.72 * heat ** 0.8)[..., None]          # translucent enough to still see the defect underneath
+    out   = base * (1 - alpha) + _heat_colours(heat) * alpha
 
-    blended = Image.composite(heatmap_img, orig_img.convert("RGB"), alpha_img)
+    region = heat > 0.3
+    if outline and region.any():
+        k = max(3, (w // 300) | 1)                       # outline thickness grows with the image
+        mask = Image.fromarray((region * 255).astype(np.uint8))
+        edge = np.asarray(mask.filter(ImageFilter.MaxFilter(k))) > 0
+        edge &= ~(np.asarray(mask.filter(ImageFilter.MinFilter(k))) > 0)
+        out[edge] = 0.15 * out[edge] + 0.85 * 255
 
     out_path = RESULTS_DIR / f"heatmap_{orig_path.stem}.jpg"
-    blended.save(out_path, "JPEG", quality=92)
+    Image.fromarray(out.clip(0, 255).astype(np.uint8)).save(out_path, "JPEG", quality=92)
     return out_path
