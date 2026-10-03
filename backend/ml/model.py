@@ -51,6 +51,7 @@ LAYERS         = tuple(os.getenv("VISIONQC_LAYERS", "layer1,layer2,layer3").spli
 CORESET_RATIO  = float(os.getenv("VISIONQC_CORESET_RATIO", "0.02"))
 BATCH_SIZE     = int(os.getenv("VISIONQC_BATCH_SIZE", "8"))
 CALIB_FOLDS    = 5
+SCORE_MARGIN   = 0.2
 # Coreset sampling is O(candidates x bank size); pre-sampling candidate patches (adjacent
 # patches are highly redundant) makes it much faster. 0 = use every patch.
 MAX_CANDIDATES = int(os.getenv("VISIONQC_MAX_CANDIDATES", "3000"))
@@ -277,6 +278,9 @@ def _load_model_if_needed():
 def normalise_score(raw: float, calibration: dict) -> float:
     hi, lo = calibration["image_max"], calibration["image_min"]
     spread = max(hi - lo, 0.1 * abs(hi), 1e-6)  # guard: a single calibration image
+    # The hottest of n good photos is beaten by a new good photo about 1 time in n+1, so the 0.5 mark sits a
+    # little above it (SCORE_MARGIN of the spread) to keep false rejects rare on small training sets.
+    hi = hi + SCORE_MARGIN * spread
     return float(min(max(0.5 + 0.5 * (raw - hi) / spread, 0.0), 1.0))
 
 

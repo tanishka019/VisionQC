@@ -13,9 +13,12 @@ CALIB = {"image_min": 10.0, "image_max": 20.0}
 
 
 def test_normalise_score_maps_calibration_range():
+    # CALIB spans 10..20; the 0.5 mark sits SCORE_MARGIN of the spread above the hottest good photo
+    mark = 20.0 + ml.SCORE_MARGIN * 10.0
     assert ml.normalise_score(10.0, CALIB) == 0.0
-    assert ml.normalise_score(20.0, CALIB) == 0.5
-    assert ml.normalise_score(30.0, CALIB) == 1.0
+    assert ml.normalise_score(20.0, CALIB) < 0.5            # the hottest good photo itself passes at 0.5
+    assert ml.normalise_score(mark, CALIB) == pytest.approx(0.5)
+    assert ml.normalise_score(mark + 10.0, CALIB) == 1.0
     assert ml.normalise_score(99.0, CALIB) == 1.0
 
 
