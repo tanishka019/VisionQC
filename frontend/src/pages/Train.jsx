@@ -29,10 +29,10 @@ function Steps({ step }) {
 // ─── Progress ────────────────────────────────────────────────────────────────
 function TrainingProgress({ progress, message }) {
   return (
-    <div className="card-body" style={{ padding: "36px 28px" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 14 }}>
-        <h2 style={{ fontSize: "1.05rem", fontWeight: 600, letterSpacing: "-0.01em" }}>Learning what normal looks like</h2>
-        <span className="mono num" style={{ fontSize: ".9rem" }}>{progress}%</span>
+    <div style={{ padding: "14px 8px" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 18 }}>
+        <h2 className="big-title" style={{ fontSize: "2.2rem" }}>Learning what normal looks like</h2>
+        <span className="mono num" style={{ fontSize: "1.1rem", color: "var(--lime)" }}>{progress}%</span>
       </div>
       <div className="progress"><div style={{ width: `${progress}%` }} /></div>
       <p className="small muted" style={{ marginTop: 14 }}>{message || "Processing images…"}</p>
@@ -158,20 +158,18 @@ export default function Train({ onTrained }) {
       <Steps step={step} />
 
       {status === "training" && (
-        <div className="card gap-y"><TrainingProgress progress={progress} message={message} /></div>
+        <div className="panel gap-y"><TrainingProgress progress={progress} message={message} /></div>
       )}
 
       {status === "done" && (
-        <div className="card gap-y">
-          <div className="card-body center" style={{ padding: "44px 28px" }}>
-            <Icon name="check" size={28} style={{ color: "var(--pass)" }} />
-            <h2 style={{ fontSize: "1.3rem", fontWeight: 600, letterSpacing: "-0.02em", margin: "12px 0 6px" }}>Model ready</h2>
-            <p className="muted" style={{ marginBottom: 24 }}>{finalMsg.replace(/^\p{Extended_Pictographic}\uFE0F?\s*/u, "")}</p>
-            <div style={{ display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap" }}>
-              <a className="btn btn-primary btn-lg" href="/inspect">Start inspecting <Icon name="arrow" size={15} /></a>
-              <button className="btn btn-secondary btn-lg" onClick={reset}>Train another</button>
-              <button className="btn btn-danger btn-lg" onClick={handleReset}>Reset model</button>
-            </div>
+        <div className="panel gap-y center" style={{ padding: "52px 28px" }}>
+          <div className="check-ring"><Icon name="check" size={26} strokeWidth={2.2} /></div>
+          <h2 className="big-title">Model ready</h2>
+          <p className="muted" style={{ margin: "12px 0 28px" }}>{finalMsg.replace(/^\p{Extended_Pictographic}\uFE0F?\s*/u, "")}</p>
+          <div style={{ display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap" }}>
+            <a className="btn btn-lime btn-lg" href="/inspect">Start inspecting <Icon name="arrow" size={15} /></a>
+            <button className="btn btn-secondary btn-lg" onClick={reset}>Train another</button>
+            <button className="btn btn-danger btn-lg" onClick={handleReset}>Reset model</button>
           </div>
         </div>
       )}

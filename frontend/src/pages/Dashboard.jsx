@@ -1,39 +1,39 @@
 // src/pages/Dashboard.jsx
 import { useEffect, useState, useCallback } from "react";
 import {
-  LineChart, Line, BarChart, Bar,
-  XAxis, YAxis, CartesianGrid, Tooltip,
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Legend,
 } from "recharts";
 import { getStats, getThreshold, setThreshold, subscribeLive } from "../api";
 import { COLORS } from "../theme";
-import { Icon, PageHead, Segmented, Spinner } from "../ui";
+import { Icon, PageHead, HourStrip, Spinner } from "../ui";
 
-// ─── KPI cell ────────────────────────────────────────────────────────────────
-function Kpi({ label, value, sub, tone, animDelay = 0 }) {
-  const [displayed, setDisplayed] = useState(0);
-  const target = typeof value === "number" ? value : null;
-
+// Counts up to `target` once on mount / when the target changes.
+function useCountUp(target, delay = 0, duration = 800) {
+  const [shown, setShown] = useState(0);
   useEffect(() => {
-    if (target === null) return;
+    if (typeof target !== "number") return;
     let start = null;
-    const duration = 700;
+    let raf;
     const step = (ts) => {
       if (!start) start = ts;
       const progress = Math.min((ts - start) / duration, 1);
-      const eased = 1 - Math.pow(1 - progress, 3);
-      setDisplayed(Math.round(eased * target));
-      if (progress < 1) requestAnimationFrame(step);
+      setShown(Math.round((1 - Math.pow(1 - progress, 3)) * target));
+      if (progress < 1) raf = requestAnimationFrame(step);
     };
-    const id = setTimeout(() => requestAnimationFrame(step), animDelay);
-    return () => clearTimeout(id);
-  }, [target, animDelay]);
+    const id = setTimeout(() => { raf = requestAnimationFrame(step); }, delay);
+    return () => { clearTimeout(id); cancelAnimationFrame(raf); };
+  }, [target, delay, duration]);
+  return typeof target === "number" ? shown : target;
+}
 
+function HeroStat({ label, value, sub, tone, delay }) {
+  const shown = useCountUp(typeof value === "number" ? value : null, delay);
   return (
-    <div className="kpi">
+    <div className="hero-stat">
       <div className="label">{label}</div>
-      <div className={`kpi-value ${tone || ""}`}>{target !== null ? displayed : value}</div>
-      {sub && <div className="kpi-sub">{sub}</div>}
+      <div className={`figure ${tone || ""}`}>{typeof value === "number" ? shown : value}</div>
+      <small>{sub}</small>
     </div>
   );
 }
@@ -43,22 +43,21 @@ const ChartTooltip = ({ active, payload, label }) => {
   if (!active || !payload?.length) return null;
   return (
     <div style={{
-      background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 6,
-      padding: "8px 12px", fontSize: ".8rem",
+      background: "#141414", color: "#f3f2ee", borderRadius: 10,
+      padding: "9px 13px", fontSize: ".8rem",
     }}>
-      <div style={{ color: COLORS.ink3, marginBottom: 4 }}>{label}</div>
+      <div style={{ color: "#a2a19b", marginBottom: 4, fontFamily: "var(--mono)", fontSize: ".7rem" }}>{label}</div>
       {payload.map((p) => (
         <div key={p.name} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ width: 7, height: 7, borderRadius: "50%", background: p.color }} />
-          <span style={{ color: COLORS.ink2 }}>{p.name}</span>
-          <span style={{ marginLeft: "auto", paddingLeft: 12, fontWeight: 600 }}>{p.value}</span>
+          <span style={{ width: 7, height: 7, borderRadius: "50%", background: p.color === COLORS.ink ? "#cbf55c" : p.color }} />
+          <span style={{ color: "#a2a19b" }}>{p.name}</span>
+          <span style={{ marginLeft: "auto", paddingLeft: 14, fontWeight: 600 }}>{p.value}</span>
         </div>
       ))}
     </div>
   );
 };
 
-const HOURS = Array.from({ length: 24 }, (_, i) => String(i).padStart(2, "0"));
 const AXIS = { fontSize: 11, fill: COLORS.ink3 };
 
 export default function Dashboard() {
@@ -67,7 +66,6 @@ export default function Dashboard() {
   const [saving,    setSaving]    = useState(false);
   const [saved,     setSaved]     = useState(false);
   const [loading,   setLoading]   = useState(true);
-  const [chartTab,  setChartTab]  = useState("hourly"); // hourly | weekly
 
   const refresh = useCallback(() => {
     Promise.all([getStats(), getThreshold()])
@@ -89,14 +87,8 @@ export default function Dashboard() {
     return () => { clearInterval(t); unsubscribe(); };
   }, [refresh]);
 
-  // Hourly chart data (fill up to current hour)
-  const curHour = new Date().getHours();
-  const hourlyData = HOURS
-    .filter((h) => Number(h) <= curHour)
-    .map((h) => {
-      const row = (stats.hourly || []).find((r) => r.hour === h);
-      return { hour: `${h}:00`, passed: row?.passed || 0, failed: row?.failed || 0 };
-    });
+  const now = new Date();
+  const dateStr = now.toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short" }).toUpperCase();
 
   const weeklyData = (stats.weekly || []).map((r) => ({
     day: new Date(r.day).toLocaleDateString("en-IN", { weekday: "short", day: "numeric" }),
@@ -104,9 +96,6 @@ export default function Dashboard() {
     failed: r.failed,
     total:  r.total,
   }));
-
-  const chartData = chartTab === "hourly" ? hourlyData : weeklyData;
-  const chartKey  = chartTab === "hourly" ? "hour"     : "day";
 
   const handleSave = async () => {
     setSaving(true);
@@ -120,6 +109,7 @@ export default function Dashboard() {
 
   const { total = 0, passed = 0, failed = 0, rejection_rate = 0, avg_confidence = 0 } = stats.today || {};
   const passRate = total > 0 ? ((passed / total) * 100).toFixed(1) : "—";
+  const bigTotal = useCountUp(total, 0, 900);
 
   const mode =
     threshold <= 0.35 ? { label: "Strict",   hint: "More items will be flagged as FAIL." } :
@@ -132,64 +122,66 @@ export default function Dashboard() {
     <div>
       <PageHead title="Overview" sub="Today's inspections at a glance." />
 
-      <div className="kpis" style={{ "--cols": 4 }}>
-        <Kpi label="Inspected" value={total}  sub="units today"                animDelay={0} />
-        <Kpi label="Passed"    value={passed} sub={`${passRate}% pass rate`}   tone="pass" animDelay={60} />
-        <Kpi label="Failed"    value={failed} sub="defects detected"           tone={failed > 0 ? "fail" : ""} animDelay={120} />
-        <Kpi label="Rejection" value={`${rejection_rate}%`} sub="of today's units" tone={rejection_rate > 20 ? "fail" : ""} animDelay={180} />
-      </div>
+      <section className="panel hero">
+        <div className="hero-top">
+          <span className="label">Today</span>
+          <span className="label">{dateStr}</span>
+        </div>
+
+        <div className="hero-grid">
+          <div className="hero-big">
+            <div className="label">Inspected</div>
+            <div className="big" style={{ marginTop: 14 }}>{bigTotal}</div>
+            <p>units checked so far today</p>
+          </div>
+          <div className="hero-side">
+            <HeroStat label="Passed"    value={passed} sub={`${passRate}% pass rate`} tone="pass" delay={80} />
+            <HeroStat label="Failed"    value={failed} sub="defects found"            tone={failed > 0 ? "fail" : ""} delay={160} />
+            <HeroStat label="Rejection" value={`${rejection_rate}%`} sub="of today's units" delay={240} />
+          </div>
+        </div>
+
+        <div className="strip">
+          <div className="label" style={{ marginBottom: 14 }}>Activity by hour</div>
+          <HourStrip rows={stats.hourly} currentHour={now.getHours()} />
+        </div>
+      </section>
 
       <div className="split">
-        {/* Throughput */}
+        {/* Last 7 days */}
         <div className="card">
           <div className="card-head">
-            <h2>{chartTab === "hourly" ? "Throughput by hour" : "Last 7 days"}</h2>
-            <Segmented
-              options={[{ key: "hourly", label: "Today" }, { key: "weekly", label: "Week" }]}
-              value={chartTab}
-              onChange={setChartTab}
-            />
+            <h2>Last 7 days</h2>
+            <span className="small muted hint-sm">Passed vs failed per day</span>
           </div>
           <div className="card-body">
             {loading ? (
               <div className="loading"><Spinner /></div>
-            ) : chartData.length === 0 ? (
+            ) : weeklyData.length === 0 ? (
               <div className="empty">
                 <h3>No data yet</h3>
                 <p>Run a few checks on the Inspect page and they will show up here.</p>
               </div>
             ) : (
-              <ResponsiveContainer width="100%" height={260}>
-                {chartTab === "hourly" ? (
-                  <LineChart data={chartData} margin={{ top: 8, right: 8, left: -24, bottom: 0 }}>
-                    <CartesianGrid vertical={false} stroke={COLORS.line} />
-                    <XAxis dataKey={chartKey} tick={AXIS} tickLine={false} axisLine={false} />
-                    <YAxis tick={AXIS} tickLine={false} axisLine={false} allowDecimals={false} />
-                    <Tooltip content={<ChartTooltip />} cursor={{ stroke: COLORS.line }} />
-                    <Legend iconType="plainline" wrapperStyle={{ fontSize: 12, color: COLORS.ink2, paddingTop: 12 }} />
-                    <Line type="monotone" dataKey="passed" name="Passed" stroke={COLORS.pass} strokeWidth={1.75} dot={false} />
-                    <Line type="monotone" dataKey="failed" name="Failed" stroke={COLORS.fail} strokeWidth={1.75} dot={false} />
-                  </LineChart>
-                ) : (
-                  <BarChart data={chartData} margin={{ top: 8, right: 8, left: -24, bottom: 0 }} barGap={2}>
-                    <CartesianGrid vertical={false} stroke={COLORS.line} />
-                    <XAxis dataKey={chartKey} tick={AXIS} tickLine={false} axisLine={false} />
-                    <YAxis tick={AXIS} tickLine={false} axisLine={false} allowDecimals={false} />
-                    <Tooltip content={<ChartTooltip />} cursor={{ fill: "rgba(18,18,18,0.04)" }} />
-                    <Legend iconType="square" iconSize={8} wrapperStyle={{ fontSize: 12, color: COLORS.ink2, paddingTop: 12 }} />
-                    <Bar dataKey="passed" name="Passed" fill={COLORS.pass} maxBarSize={18} />
-                    <Bar dataKey="failed" name="Failed" fill={COLORS.fail} maxBarSize={18} />
-                  </BarChart>
-                )}
+              <ResponsiveContainer width="100%" height={250}>
+                <BarChart data={weeklyData} margin={{ top: 8, right: 8, left: -24, bottom: 0 }} barGap={3}>
+                  <CartesianGrid vertical={false} stroke={COLORS.line} />
+                  <XAxis dataKey="day" tick={AXIS} tickLine={false} axisLine={false} />
+                  <YAxis tick={AXIS} tickLine={false} axisLine={false} allowDecimals={false} />
+                  <Tooltip content={<ChartTooltip />} cursor={{ fill: "rgba(14,14,14,0.05)" }} />
+                  <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 12, color: COLORS.ink2, paddingTop: 14 }} />
+                  <Bar dataKey="passed" name="Passed" fill={COLORS.ink}  radius={[4, 4, 0, 0]} maxBarSize={16} />
+                  <Bar dataKey="failed" name="Failed" fill={COLORS.fail} radius={[4, 4, 0, 0]} maxBarSize={16} />
+                </BarChart>
               </ResponsiveContainer>
             )}
           </div>
 
           {!loading && total > 0 && (
-            <div className="statline">
-              <div><span className="label">Avg confidence</span><b>{avg_confidence.toFixed(1)}%</b></div>
-              <div><span className="label">Pass rate</span><b>{passRate}%</b></div>
-              <div><span className="label">Threshold</span><b className="mono">{threshold.toFixed(2)}</b></div>
+            <div style={{ display: "flex", gap: 40, flexWrap: "wrap", padding: "18px 22px", borderTop: "1px solid var(--line)" }}>
+              <div><span className="label">Avg confidence</span><div className="mono num" style={{ fontSize: "1.05rem", marginTop: 4 }}>{avg_confidence.toFixed(1)}%</div></div>
+              <div><span className="label">Pass rate</span><div className="mono num" style={{ fontSize: "1.05rem", marginTop: 4 }}>{passRate}%</div></div>
+              <div><span className="label">Threshold</span><div className="mono num" style={{ fontSize: "1.05rem", marginTop: 4 }}>{threshold.toFixed(2)}</div></div>
             </div>
           )}
         </div>
@@ -198,10 +190,10 @@ export default function Dashboard() {
         <div className="card">
           <div className="card-head">
             <h2>Detection threshold</h2>
-            <span className="small muted">{mode.label}</span>
+            <span className="pill neutral">{mode.label}</span>
           </div>
           <div className="card-body">
-            <p className="small muted" style={{ marginBottom: 20 }}>
+            <p className="small muted" style={{ marginBottom: 22 }}>
               An anomaly score at or above this value is marked <strong style={{ color: "var(--fail)", fontWeight: 600 }}>FAIL</strong>.
               Lower is stricter.
             </p>
@@ -212,18 +204,18 @@ export default function Dashboard() {
               id="threshold-slider"
               type="range"
               className="range"
-              style={{ "--pct": `${pct}%` }}
+              style={{ "--pct": `${pct}%`, marginTop: 22 }}
               min={0.1} max={0.9} step={0.01}
               value={threshold}
               onChange={(e) => setThreshV(parseFloat(e.target.value))}
             />
-            <div className="range-ends"><span>0.10 · strict</span><span>0.90 · lenient</span></div>
+            <div className="range-ends"><span>0.10 · STRICT</span><span>0.90 · LENIENT</span></div>
 
-            <p className="hint" style={{ margin: "18px 0 20px" }}>{mode.hint}</p>
+            <p className="hint" style={{ margin: "20px 0 22px" }}>{mode.hint}</p>
 
             <button
               id="save-threshold-btn"
-              className="btn btn-primary btn-block"
+              className="btn btn-primary btn-lg btn-block"
               onClick={handleSave}
               disabled={saving}
             >

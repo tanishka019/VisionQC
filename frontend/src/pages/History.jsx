@@ -89,12 +89,14 @@ export default function History() {
       <PageHead title="History" sub="Every inspection, newest first." />
 
       {!loading && rows.length > 0 && (
-        <div className="kpis compact" style={{ "--cols": 5 }}>
-          <div className="kpi"><div className="label">Total records</div><div className="kpi-value">{total.toLocaleString()}</div></div>
-          <div className="kpi"><div className="label">Showing</div><div className="kpi-value">{filtered.length}</div></div>
-          <div className="kpi"><div className="label">Pass</div><div className="kpi-value pass">{passCount}</div></div>
-          <div className="kpi"><div className="label">Fail</div><div className={`kpi-value ${failCount > 0 ? "fail" : ""}`}>{failCount}</div></div>
-          <div className="kpi"><div className="label">Reject rate</div><div className={`kpi-value ${parseFloat(rateShown) > 20 ? "fail" : ""}`}>{rateShown}%</div></div>
+        <div className="panel" style={{ padding: "22px 28px" }}>
+          <div className="kpi-row" style={{ "--cols": 5 }}>
+            <div><div className="label">Total records</div><div className="figure">{total.toLocaleString()}</div></div>
+            <div><div className="label">Showing</div><div className="figure">{filtered.length}</div></div>
+            <div><div className="label">Pass</div><div className="figure pass">{passCount}</div></div>
+            <div><div className="label">Fail</div><div className={`figure ${failCount > 0 ? "fail" : ""}`}>{failCount}</div></div>
+            <div><div className="label">Reject rate</div><div className={`figure ${parseFloat(rateShown) > 20 ? "fail" : ""}`}>{rateShown}%</div></div>
+          </div>
         </div>
       )}
 
