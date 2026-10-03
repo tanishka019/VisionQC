@@ -33,15 +33,18 @@ RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 MODEL_DIR.mkdir(parents=True, exist_ok=True)
 
 IMAGE_EXTS     = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
-IMAGE_SIZE     = (256, 256)
+IMAGE_LONG_SIDE = int(os.getenv("VISIONQC_IMAGE_SIZE", "256"))   # long side of the model input, in pixels
+FIT_ASPECT      = os.getenv("VISIONQC_FIT_ASPECT", "0") == "1"   # keep the photos' aspect ratio instead of squashing to a square
+IMAGE_SIZE     = (IMAGE_LONG_SIDE, IMAGE_LONG_SIDE)              # (w, h); recomputed from the training photos when FIT_ASPECT
 BACKBONE       = os.getenv("VISIONQC_BACKBONE", "resnet18")
-LAYERS         = ("layer2", "layer3")
+LAYERS         = tuple(os.getenv("VISIONQC_LAYERS", "layer2,layer3").split(","))
 CORESET_RATIO  = float(os.getenv("VISIONQC_CORESET_RATIO", "0.02"))
 BATCH_SIZE     = int(os.getenv("VISIONQC_BATCH_SIZE", "8"))
 CALIB_FOLDS    = 5
 # Coreset sampling is O(candidates x bank size); pre-sampling candidate patches (adjacent
 # patches are highly redundant) makes it much faster. 0 = use every patch.
 MAX_CANDIDATES = int(os.getenv("VISIONQC_MAX_CANDIDATES", "3000"))
+BANK_PATCHES   = float(os.getenv("VISIONQC_BANK_PATCHES", "250"))   # target number of patches kept in the memory bank
 SEED           = 0
 MIN_IMAGES     = 5
 IMAGENET_MEAN  = (0.485, 0.456, 0.406)
@@ -50,6 +53,7 @@ IMAGENET_STD   = (0.229, 0.224, 0.225)
 _model       = None   # anomalib PatchcoreModel (torch module) with memory bank
 _calibration = None   # {"image_min", "image_max", "pixel_typical", "pixel_max": float}
 _lock        = threading.Lock()
+_img_size    = IMAGE_SIZE   # (w, h) used by _to_tensor; set from the training photos / checkpoint
 
 
 def _build_model(backbone: str = None, layers: tuple = None):
@@ -64,18 +68,37 @@ def _build_model(backbone: str = None, layers: tuple = None):
     return module.model
 
 
-def _to_tensor(img: Image.Image):
+def choose_input_size(paths: list[Path]) -> tuple[int, int]:
+    """(w, h) of the model input.
+
+    A square by default. With FIT_ASPECT the training photos' median aspect ratio is kept, so
+    parts aren't squashed (a squashed part looks different from a real one and blurs the map);
+    both sides are snapped to a multiple of 16 to match the backbone's strides.
+    """
+    if not FIT_ASPECT:
+        return (IMAGE_LONG_SIDE, IMAGE_LONG_SIDE)
+    ratios = []
+    for p in paths[:50]:
+        with Image.open(p) as im:
+            ratios.append(im.width / im.height)
+    r = float(np.median(ratios))
+    w, h = (IMAGE_LONG_SIDE, IMAGE_LONG_SIDE / r) if r >= 1 else (IMAGE_LONG_SIDE * r, IMAGE_LONG_SIDE)
+    snap = lambda v: max(32, int(round(v / 16)) * 16)
+    return (snap(w), snap(h))
+
+
+def _to_tensor(img: Image.Image, size: tuple[int, int] | None = None):
     """PIL image → normalised [3, H, W] tensor, matching the backbone's ImageNet stats."""
     import torchvision.transforms.functional as TF
-    tensor = TF.to_tensor(img.convert("RGB").resize(IMAGE_SIZE, Image.BILINEAR))
+    tensor = TF.to_tensor(img.convert("RGB").resize(size or _img_size, Image.BILINEAR))
     return TF.normalize(tensor, IMAGENET_MEAN, IMAGENET_STD)
 
 
-def _batches(paths: list[Path]):
+def _batches(paths: list[Path], size: tuple[int, int] | None = None):
     import torch
     for i in range(0, len(paths), BATCH_SIZE):
         chunk = paths[i:i + BATCH_SIZE]
-        yield torch.stack([_to_tensor(Image.open(p)) for p in chunk])
+        yield torch.stack([_to_tensor(Image.open(p), size) for p in chunk])
 
 
 def _score_raw(model, batch):
@@ -121,7 +144,7 @@ def _fit_bank(model, embeddings: list) -> None:
     if MAX_CANDIDATES and total > MAX_CANDIDATES:
         generator = torch.Generator().manual_seed(SEED)
         stacked = stacked[torch.randperm(total, generator=generator)[:MAX_CANDIDATES]]
-        ratio = min(0.10, max(0.04, 250.0 / stacked.shape[0]))
+        ratio = min(0.5, max(0.04, BANK_PATCHES / stacked.shape[0]))
     else:
         ratio = max(CORESET_RATIO, 0.05)
     model.subsample_embedding(stacked, ratio)
@@ -139,7 +162,7 @@ def train(training_images_dir: Path, product_name: str = "product", progress=Non
     `progress(percent, message)` is called as training advances (optional).
     """
     import torch
-    global _model, _calibration
+    global _model, _calibration, _img_size
 
     def report(pct: int, msg: str):
         logger.info(msg)
@@ -156,6 +179,7 @@ def train(training_images_dir: Path, product_name: str = "product", progress=Non
     except Exception:
         pass
     folds = make_folds(image_files)
+    size = choose_input_size(image_files)
     report(15, f"Loading {BACKBONE} backbone…")
     model = _build_model()
 
@@ -165,7 +189,7 @@ def train(training_images_dir: Path, product_name: str = "product", progress=Non
     with torch.no_grad():
         for i in range(0, len(image_files), BATCH_SIZE):
             chunk = image_files[i:i + BATCH_SIZE]
-            batch = torch.stack([_to_tensor(Image.open(p)) for p in chunk])
+            batch = torch.stack([_to_tensor(Image.open(p), size) for p in chunk])
             for path, e in zip(chunk, torch.chunk(model(batch), len(chunk))):
                 emb[path] = e
             done = min(i + BATCH_SIZE, len(image_files))
@@ -177,7 +201,7 @@ def train(training_images_dir: Path, product_name: str = "product", progress=Non
         report(50 + int(35 * f / len(folds)), f"Calibrating (fold {f + 1}/{len(folds)})…")
         held = set(held_out)
         _fit_bank(model, [e for p, e in emb.items() if p not in held])
-        for batch in _batches(held_out):
+        for batch in _batches(held_out, size):
             s, m = _score_raw(model, batch)
             scores.extend(s.tolist())
             map_max.extend(m.max(axis=(1, 2)).tolist())
@@ -202,7 +226,7 @@ def train(training_images_dir: Path, product_name: str = "product", progress=Non
             "calibration": calibration,
             "config": {
                 "backbone": BACKBONE, "layers": list(LAYERS),
-                "image_size": list(IMAGE_SIZE), "product_name": product_name,
+                "image_size": list(size), "product_name": product_name,
                 "image_count": len(image_files),
             },
         },
@@ -210,14 +234,14 @@ def train(training_images_dir: Path, product_name: str = "product", progress=Non
     )
 
     with _lock:
-        _model, _calibration = model, calibration
+        _model, _calibration, _img_size = model, calibration, size
 
     logger.info(f"Training complete: {json.dumps(calibration)}")
     return {"status": "trained", "image_count": len(image_files), "calibration": calibration}
 
 
 def _load_model_if_needed():
-    global _model, _calibration
+    global _model, _calibration, _img_size
     if _model is not None:
         return
     import torch
@@ -232,6 +256,7 @@ def _load_model_if_needed():
     model.memory_bank = ckpt["memory_bank"]
     model.eval()
     _model, _calibration = model, ckpt["calibration"]
+    _img_size = tuple(cfg.get("image_size") or IMAGE_SIZE)   # old checkpoints stay at the size they were trained at
 
 
 def normalise_score(raw: float, calibration: dict) -> float:
@@ -267,6 +292,12 @@ def inspect(image_path: Path, threshold: float) -> dict:
     }
 
 
+def normalised_map(amap: np.ndarray, calibration: dict) -> np.ndarray:
+    """Anomaly map scaled so a typical good pixel is 0, the hottest good pixel 0.5, twice as far 1."""
+    typical, peak = calibration["pixel_typical"], calibration["pixel_max"]
+    return np.clip(0.5 * (amap - typical) / max(peak - typical, 1e-6), 0.0, 1.0)
+
+
 def _save_heatmap(orig_path: Path, orig_img: Image.Image, amap: np.ndarray, calibration: dict) -> Path:
     """Overlay an inferno heatmap on the original image and save.
 
@@ -279,9 +310,7 @@ def _save_heatmap(orig_path: Path, orig_img: Image.Image, amap: np.ndarray, cali
     from matplotlib import colormaps
 
     w, h = orig_img.size
-    # typical good pixel → 0, hottest good pixel → 0.5, twice as far → 1
-    typical, peak = calibration["pixel_typical"], calibration["pixel_max"]
-    norm_map = np.clip(0.5 * (amap - typical) / max(peak - typical, 1e-6), 0.0, 1.0)
+    norm_map = normalised_map(amap, calibration)
 
     heatmap_rgb = (colormaps["inferno"](norm_map)[:, :, :3] * 255).astype(np.uint8)
     heatmap_img = Image.fromarray(heatmap_rgb).resize((w, h))
