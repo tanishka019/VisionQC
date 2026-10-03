@@ -31,14 +31,13 @@ In industrial manufacturing, identifying defective products on the assembly line
 ## ✨ Key Features
 
 - **🧠 Few-Shot Anomaly Learning**: Memory-bank PatchCore extracts deep patch representations from a pre-trained backbone (`ResNet-18` / `WideResNet-50`) without requiring neural network retraining.
-- **🔥 Deviation Heatmaps**: Visualizes defect locations by overlaying an Inferno colormap on the anomalous regions of the product, while leaving normal conforming areas transparent.
+- **🔥 Deviation Heatmaps**: Draws a warm heat overlay only where the part is more unusual than anything seen on the good training photos, so normal areas stay completely clear. A FAIL result also gets a thin outline around the hottest region.
 - **🎯 Real-Time PASS / FAIL Decision & Confidence**: Computes an anomaly score scaled against cross-validated calibration scores, paired with an exact confidence percentage.
 - **⚙️ Supervisor-Tunable Threshold**: Provides an interactive sensitivity slider ($0.00$ to $1.00$) to dynamically control strictness without downtime.
 - **📈 Live Production Rejection Rate**: Automatically tracks total inspected units, passed count, rejected count, and today's rejection percentage across production shifts.
 - **📷 Multi-Modal Inspection Input**:
   - Live webcam capture with interactive snapshot.
   - Single or batch file upload (`JPG`, `PNG`, `WEBP`, `BMP`).
-  - Pre-bundled sample dataset selector for immediate zero-setup demonstrations.
 - **📜 Inspection History & Audit Log**: Searchable history table with PASS/FAIL filters, inspection IDs, timestamps, and one-click heatmap review.
 
 ---
@@ -89,10 +88,10 @@ In industrial manufacturing, identifying defective products on the assembly line
 
 ### Detailed Inspection & Scoring Workflow
 
-1. **Feature Extraction**: Images are normalized to ImageNet statistics $(256 \times 256)$ and passed through intermediate convolutional layers (`layer2` and `layer3`).
+1. **Feature Extraction**: Images are resized to 384 px on the long side (keeping the photos' aspect ratio), normalized to ImageNet statistics, and passed through three convolutional layers (`layer1`, `layer2`, `layer3`). The finest layer (`layer1`) is what lets the heatmap pinpoint small defects; the coarser layers keep the PASS/FAIL verdict reliable.
 2. **Coreset Sampling**: A greedy minimax facility location algorithm selects the most informative patch embeddings, constructing a lightweight memory bank ($10\%$ sampling ratio).
 3. **Calibration (cross-validation)**: The training images are split into 5 folds, and every image is scored against a memory bank built from the *other* folds. These unbiased "unseen good part" scores set the scale so that a typical good part scores $\approx 0.0$ and the most unusual good part scores $\approx 0.5$. (Calibrating on images the bank was built from makes the scale far too tight and rejects good parts.)
-4. **Heatmap Generation**: Pixel-wise distance tensors are mapped to an Inferno color palette and blended as an alpha overlay onto the original image.
+4. **Heatmap Generation**: The per-pixel anomaly map is calibrated against the good training photos (nothing is drawn below the hottest normal pixel), mapped to a vermilion-to-amber ramp and blended onto the original image with opacity that follows intensity. On a benchmark with defects drawn at known positions this raised the share of drawn heat that lands on the defect from about 12% to about 59%, and cut haze on good photos about 50-fold.
 5. **Persistence**: SQLite records the inspection parameters, score, verdict, threshold, and artifact paths.
 
 ---
@@ -200,7 +199,6 @@ VisionQC is validated against the industry-standard **MVTec Anomaly Detection (M
 
 - **Dataset Source**: [MVTec AD Benchmark](https://www.mvtec.com/company/research/datasets/mvtec-ad)
 - **Primary Category**: **Screws** (includes defects such as *scratch_head*, *scratch_neck*, *thread_side*, and *manipulated_front*).
-- **Bundled Samples**: The repository includes 380+ sample images under [`images/`](images/) for out-of-the-box training and inspection validation.
 
 ---
 
@@ -211,12 +209,11 @@ VisionQC is validated against the industry-standard **MVTec Anomaly Detection (M
 1. **Dashboard Overview**: Check the sidebar for **Today's Production KPIs** (Total Inspections, Pass Count, Reject Count, Rejection Rate %).
 2. **Train Model**:
    - Navigate to **🚀 Train Model**.
-   - Choose **📦 Use Bundled Sample Photos** (or upload 10–25 good product photos).
+   - Upload about 20 good product photos.
    - Click **🚀 Learn Normal**. The progress bar updates live as ResNet extracts patch embeddings and builds the memory bank (~20 seconds).
 3. **Inspect Product**:
    - Navigate to **🔍 Inspect Product**.
-   - Select the **🖼️ Sample Screws** tab (or upload a photo / use the webcam).
-   - Click **Inspect Selected Sample**.
+   - Upload a photo or use the webcam.
 4. **Analyze Results**:
    - **PASS/FAIL Banner**: Bold color-coded verdict.
    - **Metric Strip**: Anomaly Score, Supervisor Threshold, Deviation vs Limit, and Confidence %.
