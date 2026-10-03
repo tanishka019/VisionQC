@@ -1,5 +1,6 @@
 import base64
 import html
+import json
 import io
 import os
 import sys
@@ -394,7 +395,7 @@ def week_html(weekly, today: datetime) -> str:
 
 
 # Navigation labels (compared below)
-NAV_OVERVIEW, NAV_INSPECT, NAV_TRAIN, NAV_HISTORY, NAV_SETTINGS = "Overview", "Inspect", "Train", "History", "Settings"
+NAV_OVERVIEW, NAV_INSPECT, NAV_TRAIN, NAV_HISTORY, NAV_REPORT, NAV_SETTINGS = "Overview", "Inspect", "Train", "History", "Report", "Settings"
 
 # ----------------- SIDEBAR -----------------
 st.sidebar.markdown(
@@ -404,7 +405,7 @@ st.sidebar.markdown(
 
 nav_choice = st.sidebar.radio(
     "Navigation",
-    [NAV_OVERVIEW, NAV_INSPECT, NAV_TRAIN, NAV_HISTORY, NAV_SETTINGS],
+    [NAV_OVERVIEW, NAV_INSPECT, NAV_TRAIN, NAV_HISTORY, NAV_REPORT, NAV_SETTINGS],
     index=1,
     label_visibility="collapsed",
 )
@@ -696,6 +697,30 @@ elif nav_choice == NAV_HISTORY:
 # =====================================================================
 # 5. SETTINGS
 # =====================================================================
+elif nav_choice == NAV_REPORT:
+    report_dir = ROOT_DIR / "report"
+    try:
+        report = json.loads((report_dir / "improvements.json").read_text(encoding="utf-8"))
+    except Exception:
+        report = {"title": "Improvement report", "intro": "No report found (report/improvements.json).", "items": []}
+    page_header(report.get("title", "Improvement report"), report.get("intro", ""))
+
+    for i, it in enumerate(report.get("items", []), 1):
+        with st.container(border=True):
+            st.markdown(f"**{i}. {it.get('feedback', '')}**")
+            st.markdown(it.get("action", ""))
+            c1, c2 = st.columns(2)
+            c1.markdown(f"**Before**  \n{it.get('before', '-')}")
+            c2.markdown(f"**After**  \n{it.get('after', '-')}")
+            if it.get("note"):
+                st.caption(it["note"])
+            ib, ia = it.get("image_before"), it.get("image_after")
+            if ib and ia and (report_dir / ib).exists() and (report_dir / ia).exists():
+                p1, p2 = st.columns(2)
+                p1.image(str(report_dir / ib), caption=it.get("caption_before", "Before"), use_container_width=True)
+                p2.image(str(report_dir / ia), caption=it.get("caption_after", "After"), use_container_width=True)
+
+
 elif nav_choice == NAV_SETTINGS:
     page_header("Settings", "Model configuration and reset.")
 

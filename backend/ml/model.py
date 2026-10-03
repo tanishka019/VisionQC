@@ -21,6 +21,11 @@ import numpy as np
 from pathlib import Path
 from PIL import Image
 
+try:
+    from . import shape
+except ImportError:   # run as a plain script / tests that put ml/ on the path
+    import shape
+
 logger = logging.getLogger("visionqc.model")
 
 BASE_DIR    = Path(__file__).parent.parent
@@ -46,6 +51,7 @@ LAYERS         = tuple(os.getenv("VISIONQC_LAYERS", "layer1,layer2,layer3").spli
 CORESET_RATIO  = float(os.getenv("VISIONQC_CORESET_RATIO", "0.02"))
 BATCH_SIZE     = int(os.getenv("VISIONQC_BATCH_SIZE", "8"))
 CALIB_FOLDS    = 5
+SCORE_MARGIN   = 0.2
 # Coreset sampling is O(candidates x bank size); pre-sampling candidate patches (adjacent
 # patches are highly redundant) makes it much faster. 0 = use every patch.
 MAX_CANDIDATES = int(os.getenv("VISIONQC_MAX_CANDIDATES", "3000"))
@@ -218,6 +224,11 @@ def train(training_images_dir: Path, product_name: str = "product", progress=Non
         "pixel_max": float(max(map_max)),
     }
 
+    # Straightness of the part (only when every photo shows one long object on a plain background)
+    devs = [m["dev"] for m in (shape.measure(Image.open(p)) for p in image_files) if m is not None]
+    if len(devs) >= 0.8 * len(image_files):
+        calibration["shape_min"], calibration["shape_max"] = float(min(devs)), float(max(devs))
+
     # 3. Final memory bank from ALL images
     report(88, "Building final memory bank…")
     _fit_bank(model, list(emb.values()))
@@ -267,7 +278,21 @@ def _load_model_if_needed():
 def normalise_score(raw: float, calibration: dict) -> float:
     hi, lo = calibration["image_max"], calibration["image_min"]
     spread = max(hi - lo, 0.1 * abs(hi), 1e-6)  # guard: a single calibration image
+    # The hottest of n good photos is beaten by a new good photo about 1 time in n+1, so the 0.5 mark sits a
+    # little above it (SCORE_MARGIN of the spread) to keep false rejects rare on small training sets.
+    hi = hi + SCORE_MARGIN * spread
     return float(min(max(0.5 + 0.5 * (raw - hi) / spread, 0.0), 1.0))
+
+
+def shape_limit(calibration: dict) -> float:
+    """Straightness deviation that maps to score 0.5: the worst normal part plus a margin."""
+    lo, hi = calibration["shape_min"], calibration["shape_max"]
+    return hi + 0.5 * (hi - lo) + 0.004
+
+
+def shape_score(dev: float, calibration: dict) -> float:
+    limit = shape_limit(calibration)
+    return float(min(max(0.5 + 0.5 * (dev - limit) / (0.5 * limit), 0.0), 1.0))
 
 
 def inspect(image_path: Path, threshold: float) -> dict:
@@ -283,10 +308,19 @@ def inspect(image_path: Path, threshold: float) -> dict:
 
     raw_score = float(raw_scores[0])
     score     = normalise_score(raw_score, calibration)
+    shape_map = None
+    if "shape_max" in calibration:
+        m = shape.measure(img)
+        if m is not None:
+            s_score = shape_score(m["dev"], calibration)
+            if s_score > score:
+                score = s_score
+            if s_score >= 0.45:
+                shape_map = m["resid"] / shape_limit(calibration)   # 1.0 = at the limit
     result    = "FAIL" if score >= threshold else "PASS"
     confidence = round((score if result == "FAIL" else 1 - score) * 100, 1)
 
-    heatmap_path = _save_heatmap(image_path, img, maps[0], calibration, outline=(result == "FAIL"))
+    heatmap_path = _save_heatmap(image_path, img, maps[0], calibration, outline=(result == "FAIL"), shape_map=shape_map)
 
     return {
         "score":        round(score, 4),
@@ -325,7 +359,7 @@ def _heat_colours(heat: np.ndarray) -> np.ndarray:
     return np.stack([np.interp(heat, pos, _HEAT_STOPS[:, c]) for c in range(3)], axis=-1)
 
 
-def _save_heatmap(orig_path: Path, orig_img: Image.Image, amap: np.ndarray, calibration: dict, outline: bool = True) -> Path:
+def _save_heatmap(orig_path: Path, orig_img: Image.Image, amap: np.ndarray, calibration: dict, outline: bool = True, shape_map=None) -> Path:
     """Draw the heat over the original photo and save it.
 
     Heat is calibrated against what normal photos look like (see HEAT_FLOOR) and drawn with an opacity that
@@ -337,6 +371,10 @@ def _save_heatmap(orig_path: Path, orig_img: Image.Image, amap: np.ndarray, cali
     w, h = orig_img.size
     heat_small = Image.fromarray((heat_intensity(amap, calibration) * 255).astype(np.uint8))
     heat = np.asarray(heat_small.resize((w, h), Image.BICUBIC), dtype=float) / 255.0
+
+    if shape_map is not None:   # bent-part evidence: heat on the part, strongest where the centre line strays
+        sm = np.asarray(Image.fromarray(shape_map.astype(np.float32)).resize((w, h), Image.BILINEAR))
+        heat = np.maximum(heat, np.clip((sm - HEAT_FLOOR) / (HEAT_TOP - HEAT_FLOOR), 0.0, 1.0))
 
     base  = np.asarray(orig_img.convert("RGB"), dtype=float)
     alpha = (0.72 * heat ** 0.8)[..., None]          # translucent enough to still see the defect underneath

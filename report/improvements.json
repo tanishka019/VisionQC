@@ -1,0 +1,35 @@
+{
+  "title": "Improvement report",
+  "intro": "What was flagged, what we changed, and what the numbers say now. To add a point, copy an entry below into report/improvements.json (images go in report/).",
+  "items": [
+    {
+      "feedback": "Bent screws were showing PASS.",
+      "action": "Added a straightness check next to PatchCore. It measures how far a long part's centre line strays from a straight line (any rotation or size) and draws heat on the bent section.",
+      "before": "17% of bent screws flagged",
+      "after": "100% flagged, 0% of good screws rejected",
+      "note": "Measured on 12 synthetic bent screws, 12 rusty ones and 12 good ones on a grey background.",
+      "image_before": "bend2_before.jpg",
+      "image_after": "bend2_after.jpg",
+      "caption_before": "Before: PASS, no heat on the bend",
+      "caption_after": "After: FAIL, heat on the bent section"
+    },
+    {
+      "feedback": "Good parts were being rejected.",
+      "action": "Calibrated the score with 5-fold cross-validation, so every photo is scored against a model that never saw it.",
+      "before": "52% of good parts rejected",
+      "after": "0% rejected"
+    },
+    {
+      "feedback": "Heatmaps should be more accurate.",
+      "action": "Finer features (3 layers), aspect-correct input and a calibrated heat scale. Ordinary texture is left clear, and the outline is drawn only on a FAIL.",
+      "before": "12% of the heat sat on the defect",
+      "after": "59% on the defect, about 50x less haze on good photos"
+    },
+    {
+      "feedback": "The person should train it with their own photos.",
+      "action": "Removed the bundled sample option. Training is only by uploading about 20 good photos.",
+      "before": "Instant demo from the bundled sample folder",
+      "after": "Upload 20 of your own photos"
+    }
+  ]
+}

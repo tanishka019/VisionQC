@@ -13,9 +13,12 @@ CALIB = {"image_min": 10.0, "image_max": 20.0}
 
 
 def test_normalise_score_maps_calibration_range():
+    # CALIB spans 10..20; the 0.5 mark sits SCORE_MARGIN of the spread above the hottest good photo
+    mark = 20.0 + ml.SCORE_MARGIN * 10.0
     assert ml.normalise_score(10.0, CALIB) == 0.0
-    assert ml.normalise_score(20.0, CALIB) == 0.5
-    assert ml.normalise_score(30.0, CALIB) == 1.0
+    assert ml.normalise_score(20.0, CALIB) < 0.5            # the hottest good photo itself passes at 0.5
+    assert ml.normalise_score(mark, CALIB) == pytest.approx(0.5)
+    assert ml.normalise_score(mark + 10.0, CALIB) == 1.0
     assert ml.normalise_score(99.0, CALIB) == 1.0
 
 
@@ -140,3 +143,31 @@ def test_train_and_inspect_end_to_end(tmp_path):
     assert bad["result"] == "FAIL"
     assert bad["score"] > max(g["score"] for g in goods)
     assert Path(bad["heatmap_path"]).exists()
+
+
+# ── shape (bend) check ───────────────────────────────────────────────────────
+def _synthetic_rod(bend: float, angle: float = 0.6):
+    from PIL import ImageDraw
+    img = Image.new("RGB", (320, 320), (205, 205, 205))
+    d = ImageDraw.Draw(img)
+    pts = []
+    for i in range(41):
+        t = i / 40 - 0.5
+        x, y = 190 * t, bend * 190 * np.sin((t + 0.5) * np.pi) ** 2 * 0.4
+        pts.append((160 + x * np.cos(angle) - y * np.sin(angle), 160 + x * np.sin(angle) + y * np.cos(angle)))
+    for x, y in pts:
+        d.ellipse([x - 7, y - 7, x + 7, y + 7], fill=(140, 140, 145))
+    return img
+
+
+def test_shape_measure_separates_bent_from_straight():
+    from ml import shape
+    straight = shape.measure(_synthetic_rod(0.0))["dev"]
+    bent = shape.measure(_synthetic_rod(0.6))["dev"]
+    assert straight < 0.015 < 0.03 < bent
+
+
+def test_shape_check_is_off_for_busy_backgrounds():
+    from ml import shape
+    noise = Image.fromarray(np.random.RandomState(0).randint(0, 255, (200, 200, 3)).astype("uint8"))
+    assert shape.measure(noise) is None
