@@ -45,17 +45,20 @@ IMAGE_EXTS     = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 IMAGE_LONG_SIDE = int(os.getenv("VISIONQC_IMAGE_SIZE", "384"))   # long side of the model input, in pixels
 FIT_ASPECT      = os.getenv("VISIONQC_FIT_ASPECT", "1") == "1"   # keep the photos' aspect ratio instead of squashing to a square
 IMAGE_SIZE     = (IMAGE_LONG_SIDE, IMAGE_LONG_SIDE)              # (w, h); recomputed from the training photos when FIT_ASPECT
-BACKBONE       = os.getenv("VISIONQC_BACKBONE", "resnet18")
+BACKBONE       = os.getenv("VISIONQC_BACKBONE", "wide_resnet50_2")
 # layer1 (stride 4) localises small defects; layer2/layer3 carry the context the verdict needs.
-LAYERS         = tuple(os.getenv("VISIONQC_LAYERS", "layer1,layer2,layer3").split(","))
+LAYERS         = tuple(os.getenv("VISIONQC_LAYERS", "layer2,layer3").split(","))
 CORESET_RATIO  = float(os.getenv("VISIONQC_CORESET_RATIO", "0.02"))
 BATCH_SIZE     = int(os.getenv("VISIONQC_BATCH_SIZE", "8"))
 CALIB_FOLDS    = 5
 SCORE_MARGIN   = 0.2
+ALIGN          = os.getenv("VISIONQC_ALIGN", "1") == "1"                       # rotate/crop single long parts to a canonical pose
+ALIGN_CANVAS   = tuple(int(v) for v in os.getenv("VISIONQC_ALIGN_SIZE", "448x256").split("x"))
 # Coreset sampling is O(candidates x bank size); pre-sampling candidate patches (adjacent
 # patches are highly redundant) makes it much faster. 0 = use every patch.
-MAX_CANDIDATES = int(os.getenv("VISIONQC_MAX_CANDIDATES", "3000"))
-BANK_PATCHES   = float(os.getenv("VISIONQC_BANK_PATCHES", "250"))   # target number of patches kept in the memory bank
+MAX_CANDIDATES = int(os.getenv("VISIONQC_MAX_CANDIDATES", "1"))      # 0 = use every patch (slow)
+CAND_PER_IMAGE, MIN_CAND, MAX_CAND_CAP = 480, 8000, 20000             # patches the coreset picks from: 480 per photo
+BANK_PER_IMAGE, MIN_BANK, BANK_CAP = 60, 1200, 2400                   # patches kept: 60 per photo
 SEED           = 0
 MIN_IMAGES     = 5
 IMAGENET_MEAN  = (0.485, 0.456, 0.406)
@@ -64,6 +67,7 @@ IMAGENET_STD   = (0.229, 0.224, 0.225)
 _model       = None   # anomalib PatchcoreModel (torch module) with memory bank
 _calibration = None   # {"image_min", "image_max", "pixel_typical", "pixel_max": float}
 _lock        = threading.Lock()
+_align_size  = None   # (w, h) canvas when the model was trained on aligned parts, else None
 _img_size    = IMAGE_SIZE   # (w, h) used by _to_tensor; set from the training photos / checkpoint
 
 
@@ -98,9 +102,20 @@ def choose_input_size(paths: list[Path]) -> tuple[int, int]:
     return (snap(w), snap(h))
 
 
-def _to_tensor(img: Image.Image, size: tuple[int, int] | None = None):
+def _prepare(img: Image.Image):
+    """Apply the part alignment the model was trained with. Returns (image, M); M is None when not aligned."""
+    if _align_size:
+        got = shape.align(img, _align_size)
+        if got is not None:
+            return got
+    return img, None
+
+
+def _to_tensor(img: Image.Image, size: tuple[int, int] | None = None, prepared: bool = False):
     """PIL image → normalised [3, H, W] tensor, matching the backbone's ImageNet stats."""
     import torchvision.transforms.functional as TF
+    if not prepared:
+        img = _prepare(img)[0]
     tensor = TF.to_tensor(img.convert("RGB").resize(size or _img_size, Image.BILINEAR))
     return TF.normalize(tensor, IMAGENET_MEAN, IMAGENET_STD)
 
@@ -148,14 +163,21 @@ def make_folds(paths: list[Path], k: int = CALIB_FOLDS, seed: int = SEED) -> lis
 
 
 def _fit_bank(model, embeddings: list) -> None:
-    """Build the PatchCore memory bank (coreset) from per-image patch embeddings."""
+    """Build the PatchCore memory bank (coreset) from per-image patch embeddings.
+
+    The bank grows with the number of photos (more photos = more kinds of normal to remember); a fixed
+    size made scores collapse when 50 photos were used instead of 25.
+    """
     import torch
+    n = len(embeddings)
+    cand = int(min(MAX_CAND_CAP, max(MIN_CAND, CAND_PER_IMAGE * n))) if MAX_CANDIDATES else 0
+    bank = min(BANK_CAP, max(MIN_BANK, BANK_PER_IMAGE * n))
     stacked = torch.vstack(embeddings)
     total = stacked.shape[0]
-    if MAX_CANDIDATES and total > MAX_CANDIDATES:
+    if cand and total > cand:
         generator = torch.Generator().manual_seed(SEED)
-        stacked = stacked[torch.randperm(total, generator=generator)[:MAX_CANDIDATES]]
-        ratio = min(0.5, max(0.04, BANK_PATCHES / stacked.shape[0]))
+        stacked = stacked[torch.randperm(total, generator=generator)[:cand]]
+        ratio = min(0.5, max(0.04, bank / stacked.shape[0]))
     else:
         ratio = max(CORESET_RATIO, 0.05)
     model.subsample_embedding(stacked, ratio)
@@ -173,7 +195,7 @@ def train(training_images_dir: Path, product_name: str = "product", progress=Non
     `progress(percent, message)` is called as training advances (optional).
     """
     import torch
-    global _model, _calibration, _img_size
+    global _model, _calibration, _img_size, _align_size
 
     def report(pct: int, msg: str):
         logger.info(msg)
@@ -190,7 +212,13 @@ def train(training_images_dir: Path, product_name: str = "product", progress=Non
     except Exception:
         pass
     folds = make_folds(image_files)
-    size = choose_input_size(image_files)
+    # Align single long parts (screws, bolts…) to a canonical pose when every photo allows it
+    _align_size = None
+    if ALIGN:
+        ok = sum(shape.align(Image.open(p), ALIGN_CANVAS) is not None for p in image_files)
+        if ok >= 0.8 * len(image_files):
+            _align_size = ALIGN_CANVAS
+    size = _align_size or choose_input_size(image_files)
     report(15, f"Loading {BACKBONE} backbone…")
     model = _build_model()
 
@@ -220,6 +248,7 @@ def train(training_images_dir: Path, product_name: str = "product", progress=Non
     calibration = {
         "image_min": float(min(scores)),
         "image_max": float(max(scores)),
+        "image_anchor": float(np.percentile(scores, 95)),
         "pixel_typical": float(np.median(map_median)),
         "pixel_max": float(max(map_max)),
     }
@@ -242,7 +271,7 @@ def train(training_images_dir: Path, product_name: str = "product", progress=Non
             "calibration": calibration,
             "config": {
                 "backbone": BACKBONE, "layers": list(LAYERS),
-                "image_size": list(size), "product_name": product_name,
+                "image_size": list(size), "align": list(_align_size) if _align_size else None, "product_name": product_name,
                 "image_count": len(image_files),
             },
         },
@@ -257,7 +286,7 @@ def train(training_images_dir: Path, product_name: str = "product", progress=Non
 
 
 def _load_model_if_needed():
-    global _model, _calibration, _img_size
+    global _model, _calibration, _img_size, _align_size
     if _model is not None:
         return
     import torch
@@ -272,11 +301,12 @@ def _load_model_if_needed():
     model.memory_bank = ckpt["memory_bank"]
     model.eval()
     _model, _calibration = model, ckpt["calibration"]
+    _align_size = tuple(cfg["align"]) if cfg.get("align") else None
     _img_size = tuple(cfg.get("image_size") or IMAGE_SIZE)   # old checkpoints stay at the size they were trained at
 
 
 def normalise_score(raw: float, calibration: dict) -> float:
-    hi, lo = calibration["image_max"], calibration["image_min"]
+    hi, lo = calibration.get("image_anchor", calibration["image_max"]), calibration["image_min"]   # p95 of unseen-good scores
     spread = max(hi - lo, 0.1 * abs(hi), 1e-6)  # guard: a single calibration image
     # The hottest of n good photos is beaten by a new good photo about 1 time in n+1, so the 0.5 mark sits a
     # little above it (SCORE_MARGIN of the spread) to keep false rejects rare on small training sets.
@@ -303,8 +333,18 @@ def inspect(image_path: Path, threshold: float) -> dict:
     with _lock:
         _load_model_if_needed()
         img = Image.open(image_path).convert("RGB")
-        raw_scores, maps = _score_raw(_model, _to_tensor(img).unsqueeze(0))
+        prepared, M = _prepare(img)
+        raw_scores, maps = _score_raw(_model, _to_tensor(prepared, prepared=True).unsqueeze(0))
         calibration = _calibration
+    amap = maps[0]
+    if M is not None:   # heat was computed on the aligned part: map it back onto the original photo
+        import cv2
+        typical = calibration["pixel_typical"]
+        amap = cv2.warpAffine(amap.astype(np.float32), M, img.size, flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP,
+                              borderMode=cv2.BORDER_CONSTANT, borderValue=float(typical))
+        keep = shape.part_mask(img)   # dust and shadows on the plain background are not defects
+        if keep is not None:
+            amap = np.where(keep, amap, typical)
 
     raw_score = float(raw_scores[0])
     score     = normalise_score(raw_score, calibration)
@@ -320,7 +360,7 @@ def inspect(image_path: Path, threshold: float) -> dict:
     result    = "FAIL" if score >= threshold else "PASS"
     confidence = round((score if result == "FAIL" else 1 - score) * 100, 1)
 
-    heatmap_path = _save_heatmap(image_path, img, maps[0], calibration, outline=(result == "FAIL"), shape_map=shape_map)
+    heatmap_path = _save_heatmap(image_path, img, amap, calibration, outline=(result == "FAIL"), shape_map=shape_map, relative=True)
 
     return {
         "score":        round(score, 4),
@@ -343,6 +383,7 @@ def normalised_map(amap: np.ndarray, calibration: dict) -> np.ndarray:
 # defect rose from ~12% to ~59% and haze on good photos fell ~50x versus the old inferno-opacity drawing.
 HEAT_FLOOR = 0.65
 HEAT_TOP   = 1.30
+RELATIVE_FLOOR = 0.30   # the always-visible heat view starts here (the calibrated defect heat starts at HEAT_FLOOR)
 _HEAT_STOPS = np.array([[232, 71, 43], [255, 125, 30], [255, 205, 50]], dtype=float)   # vermilion → orange → amber
 
 
@@ -359,7 +400,7 @@ def _heat_colours(heat: np.ndarray) -> np.ndarray:
     return np.stack([np.interp(heat, pos, _HEAT_STOPS[:, c]) for c in range(3)], axis=-1)
 
 
-def _save_heatmap(orig_path: Path, orig_img: Image.Image, amap: np.ndarray, calibration: dict, outline: bool = True, shape_map=None) -> Path:
+def _save_heatmap(orig_path: Path, orig_img: Image.Image, amap: np.ndarray, calibration: dict, outline: bool = True, shape_map=None, relative: bool = False) -> Path:
     """Draw the heat over the original photo and save it.
 
     Heat is calibrated against what normal photos look like (see HEAT_FLOOR) and drawn with an opacity that
@@ -372,6 +413,13 @@ def _save_heatmap(orig_path: Path, orig_img: Image.Image, amap: np.ndarray, cali
     heat_small = Image.fromarray((heat_intensity(amap, calibration) * 255).astype(np.uint8))
     heat = np.asarray(heat_small.resize((w, h), Image.BICUBIC), dtype=float) / 255.0
 
+    hard = heat    # the calibrated heat alone decides where the FAIL outline goes
+    if relative:   # always-visible view: how unusual each spot is, even when the part passes (faint = normal)
+        typical, peak = calibration["pixel_typical"], calibration["pixel_max"]
+        x = (amap - typical) / max(peak - typical, 1e-6)
+        x_img = np.asarray(Image.fromarray(x.astype(np.float32)).resize((w, h), Image.BICUBIC))
+        heat = np.maximum(heat, 0.8 * np.clip((x_img - RELATIVE_FLOOR) / (HEAT_TOP - RELATIVE_FLOOR), 0.0, 1.0))
+
     if shape_map is not None:   # bent-part evidence: heat on the part, strongest where the centre line strays
         sm = np.asarray(Image.fromarray(shape_map.astype(np.float32)).resize((w, h), Image.BILINEAR))
         heat = np.maximum(heat, np.clip((sm - HEAT_FLOOR) / (HEAT_TOP - HEAT_FLOOR), 0.0, 1.0))
@@ -380,7 +428,7 @@ def _save_heatmap(orig_path: Path, orig_img: Image.Image, amap: np.ndarray, cali
     alpha = (0.72 * heat ** 0.8)[..., None]          # translucent enough to still see the defect underneath
     out   = base * (1 - alpha) + _heat_colours(heat) * alpha
 
-    region = heat > 0.3
+    region = hard > 0.3
     if outline and region.any():
         k = max(3, (w // 300) | 1)                       # outline thickness grows with the image
         mask = Image.fromarray((region * 255).astype(np.uint8))

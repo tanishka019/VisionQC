@@ -3,6 +3,17 @@
   "intro": "What was flagged, what we changed, and what the numbers say now. To add a point, copy an entry below into report/improvements.json (images go in report/).",
   "items": [
     {
+      "feedback": "Wrong answers and wrong heatmaps on real screws.",
+      "action": "Measured on a real labelled screw dataset (MVTec AD 'screw': 25 training photos, 41 good and 119 defective test photos) instead of guessing. Found the cause: the model kept only 250 patches of 'normal' and saw every screw at a random angle. Fixes: auto-rotate and crop the part to one pose, a Wide ResNet-50 backbone with a memory that grows with the number of photos, a threshold line set from the 95th percentile, heat hidden on the background, and a stricter default threshold.",
+      "before": "AUROC 0.52 (a coin flip). At the old 0.5 line: 10% of defects caught, 17% of good rejected.",
+      "after": "AUROC 0.86 (0.89 with 50 photos). At threshold 0.3: 81% of defects caught, 15% of good rejected. Scratches on the neck: 80%.",
+      "note": "Dataset: MVTec AD (CC BY-NC-SA 4.0), used only for evaluation and not stored in the repo. Reproduce with: python backend/eval/evaluate.py DATA_DIR. Thread and head defects are still the hardest.",
+      "image_before": "real_before.jpg",
+      "image_after": "real_after.jpg",
+      "caption_before": "Before: heat on rust and heads, little on the real defects",
+      "caption_after": "After: heat on the scratches, background dust hidden"
+    },
+    {
       "feedback": "Bent screws were showing PASS.",
       "action": "Added a straightness check next to PatchCore. It measures how far a long part's centre line strays from a straight line (any rotation or size) and draws heat on the bent section.",
       "before": "17% of bent screws flagged",

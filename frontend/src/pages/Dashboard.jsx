@@ -4,7 +4,7 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Legend,
 } from "recharts";
-import { getStats, getThreshold, setThreshold, subscribeLive } from "../api";
+import { getStats, getThreshold, setThreshold, subscribeLive, downloadTodayReport } from "../api";
 import { COLORS } from "../theme";
 import { Icon, PageHead, HourStrip, Spinner } from "../ui";
 
@@ -62,7 +62,7 @@ const AXIS = { fontSize: 11, fill: COLORS.ink3 };
 
 export default function Dashboard() {
   const [stats,     setStats]     = useState({ today: {}, hourly: [], weekly: [] });
-  const [threshold, setThreshV]   = useState(0.5);
+  const [threshold, setThreshV]   = useState(0.25);
   const [saving,    setSaving]    = useState(false);
   const [saved,     setSaved]     = useState(false);
   const [loading,   setLoading]   = useState(true);
@@ -97,6 +97,21 @@ export default function Dashboard() {
     total:  r.total,
   }));
 
+  const [reporting, setReporting] = useState(false);
+  const handleReport = async () => {
+    setReporting(true);
+    try {
+      const res = await downloadTodayReport();
+      const url = URL.createObjectURL(res.data);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `visionqc-report-${new Date().toISOString().slice(0, 10)}.pdf`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch { /* noop */ }
+    finally { setReporting(false); }
+  };
+
   const handleSave = async () => {
     setSaving(true);
     try {
@@ -121,6 +136,11 @@ export default function Dashboard() {
   return (
     <div>
       <PageHead title="Overview" sub="Today's inspections at a glance." />
+      <div style={{ display: "flex", justifyContent: "flex-end", margin: "-8px 0 16px" }}>
+        <button id="download-report-btn" className="btn btn-primary" onClick={handleReport} disabled={reporting}>
+          {reporting ? <><span className="spin" /> Preparing</> : "Download today's report"}
+        </button>
+      </div>
 
       <section className="panel hero">
         <div className="hero-top">

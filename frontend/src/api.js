@@ -34,6 +34,7 @@ export const setThreshold   = (t)             => api.post("/threshold", { thresh
 
 // ─── Stats ─────────────────────────────────────────
 export const getStats       = ()              => api.get("/stats");
+export const downloadTodayReport = () => api.get("/report/today.pdf", { responseType: "blob" });
 
 // ─── History ───────────────────────────────────────
 export const getHistory = (limit = 200, filter = null, page = 1) => {

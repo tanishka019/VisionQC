@@ -241,3 +241,19 @@ def set_config(key: str, value: str):
     )
     conn.commit()
     conn.close()
+
+
+def get_today_inspections() -> list:
+    """Every inspection logged today, oldest first (for the daily report)."""
+    conn = get_conn()
+    cur = conn.cursor()
+    today = datetime.now().strftime("%Y-%m-%d")
+    cur.execute("""
+        SELECT id, timestamp, anomaly_score, confidence, result, threshold, heatmap_path, filename
+        FROM inspections
+        WHERE timestamp LIKE ?
+        ORDER BY id ASC
+    """, (f"{today}%",))
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return rows

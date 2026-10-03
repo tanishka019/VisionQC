@@ -88,7 +88,7 @@ In industrial manufacturing, identifying defective products on the assembly line
 
 ### Detailed Inspection & Scoring Workflow
 
-1. **Feature Extraction**: Images are resized to 384 px on the long side (keeping the photos' aspect ratio), normalized to ImageNet statistics, and passed through three convolutional layers (`layer1`, `layer2`, `layer3`). The finest layer (`layer1`) is what lets the heatmap pinpoint small defects; the coarser layers keep the PASS/FAIL verdict reliable.
+1. **Feature Extraction**: A single long part on a plain background is first rotated and cropped to one pose. Images are then normalized to ImageNet statistics and passed through two convolutional layers (`layer2`, `layer3`) of a Wide ResNet-50, which gave the best accuracy on real screws (see *Measuring accuracy*).
 2. **Coreset Sampling**: A greedy minimax facility location algorithm selects the most informative patch embeddings, constructing a lightweight memory bank ($10\%$ sampling ratio).
 3. **Calibration (cross-validation)**: The training images are split into 5 folds, and every image is scored against a memory bank built from the *other* folds. These unbiased "unseen good part" scores set the scale so that a typical good part scores $\approx 0.0$ and the most unusual good part scores $\approx 0.5$. (Calibrating on images the bank was built from makes the scale far too tight and rejects good parts.)
 4. **Heatmap Generation**: The per-pixel anomaly map is calibrated against the good training photos (nothing is drawn below the hottest normal pixel), mapped to a vermilion-to-amber ramp and blended onto the original image with opacity that follows intensity. On a benchmark with defects drawn at known positions this raised the share of drawn heat that lands on the defect from about 12% to about 59%, and cut haze on good photos about 50-fold.
@@ -255,3 +255,11 @@ Developed for the **TechForge Hackathon**:
 ## 📄 License
 
 This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
+
+## Measuring accuracy
+
+`python backend/eval/evaluate.py DATA_DIR` trains on `DATA_DIR/train_good/` and tests on `test_good/` and `test_bad/`
+(defect type = file-name prefix). It prints AUROC, the catch rate and false-reject rate at several thresholds, the best
+threshold, and a per-defect breakdown. On MVTec AD "screw" (25 training photos): AUROC 0.86, 81% of defects caught and
+15% of good parts rejected at threshold 0.3. Parts that are one long object on a plain background are automatically
+rotated and cropped to a single pose before scoring (`VISIONQC_ALIGN=0` turns this off).

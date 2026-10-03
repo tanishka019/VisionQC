@@ -432,7 +432,7 @@ def show_model_chip(ready: bool, name: str):
 show_model_chip(is_model_ready, product_name)
 
 # Threshold Slider
-current_threshold = float(db.get_config("threshold") or "0.5")
+current_threshold = float(db.get_config("threshold") or "0.25")
 threshold_val = st.sidebar.slider(
     "Detection threshold",
     min_value=0.0,
@@ -456,6 +456,17 @@ if nav_choice == NAV_OVERVIEW:
     stats = db.get_today_stats()
 
     render(hero_html(stats, db.get_hourly_stats(), now))
+    st.write("")
+
+    import daily_report
+    report_pdf = daily_report.build_pdf(
+        stats, db.get_hourly_stats(), db.get_weekly_stats(), db.get_today_inspections(),
+        {"Product": product_name, "Backbone": model.BACKBONE,
+         "Input resolution": f"{model.IMAGE_LONG_SIDE} px (long side)", "Threshold": f"{threshold_val:.2f}"},
+        now,
+    )
+    st.download_button("Download today's report (PDF)", report_pdf, file_name=f"visionqc-report-{now:%Y-%m-%d}.pdf",
+                       mime="application/pdf", type="primary")
     st.write("")
 
     c1, c2 = st.columns([1.6, 1], gap="large")

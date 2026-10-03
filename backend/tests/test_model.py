@@ -78,6 +78,19 @@ def test_clean_photo_is_left_untouched(tmp_path, monkeypatch):
     assert np.abs(out - np.asarray(img).astype(int)).max() <= 6                  # JPEG noise only
 
 
+def test_relative_heat_view_is_visible_without_a_defect(tmp_path, monkeypatch):
+    monkeypatch.setattr(ml, "RESULTS_DIR", tmp_path)
+    img = Image.new("RGB", (600, 450), (200, 170, 100))
+    amap = np.full((45, 60), 10.0)
+    amap[15:30, 20:40] = 10.0 + 10.0 * 0.6          # a warm spot, still inside the normal range
+    base = np.asarray(img).astype(int)
+    plain = np.asarray(Image.open(ml._save_heatmap(tmp_path / "d.png", img, amap, HEAT_CAL))).astype(int)
+    rel   = np.asarray(Image.open(ml._save_heatmap(tmp_path / "e.png", img, amap, HEAT_CAL, relative=True))).astype(int)
+    assert np.abs(plain - base).max() <= 6                                       # calibrated view: nothing to show
+    assert (np.abs(rel - base).max(axis=2) > 10)[200:290, 200:400].any()         # relative view: the spot is drawn
+    assert np.abs(rel - base)[:100].max() <= 6                                   # ...and only there
+
+
 def test_input_size_keeps_the_photos_aspect_ratio(tmp_path, monkeypatch):
     monkeypatch.setattr(ml, "IMAGE_LONG_SIDE", 384)
 
@@ -109,7 +122,7 @@ def test_train_rejects_too_few_images(tmp_path):
 def _part(seed: int, defect: bool = False) -> Image.Image:
     """A synthetic 'part': textured grey disc; the defect is a dark scratch."""
     rng = np.random.default_rng(seed)
-    base = (rng.normal(160, 6, (256, 256, 3))).clip(0, 255).astype(np.uint8)
+    base = (rng.normal(160, 3, (256, 256, 3))).clip(0, 255).astype(np.uint8)
     img = Image.fromarray(base)
     d = ImageDraw.Draw(img)
     d.ellipse([48, 48, 208, 208], fill=(110, 110, 120))
@@ -122,10 +135,10 @@ def _part(seed: int, defect: bool = False) -> Image.Image:
 def test_train_and_inspect_end_to_end(tmp_path):
     train_dir = tmp_path / "train"
     train_dir.mkdir()
-    for i in range(12):
+    for i in range(20):
         _part(i).save(train_dir / f"good_{i}.png")
     result = ml.train(train_dir, "disc")
-    assert result["image_count"] == 12
+    assert result["image_count"] == 20
     assert ml.CHECKPOINT.exists()
 
     ml._model = None  # force reload from checkpoint
@@ -171,3 +184,16 @@ def test_shape_check_is_off_for_busy_backgrounds():
     from ml import shape
     noise = Image.fromarray(np.random.RandomState(0).randint(0, 255, (200, 200, 3)).astype("uint8"))
     assert shape.measure(noise) is None
+
+
+def test_align_puts_a_rotated_part_in_the_same_pose():
+    from ml import shape
+    canvas = (448, 256)
+    outs = [shape.align(_synthetic_rod(0.0, angle=a), canvas) for a in (0.3, 1.4, 2.6)]
+    assert all(o is not None for o in outs)
+    arrs = [np.asarray(o[0].convert("L"), dtype=float) for o in outs]
+    assert all(a.shape == (256, 448) for a in arrs)
+    # whatever the angle, the part ends up horizontal and filling the frame: the dark pixels agree
+    masks = [a < 170 for a in arrs]
+    assert (masks[0] & masks[1]).sum() / (masks[0] | masks[1]).sum() > 0.7
+    assert (masks[0] & masks[2]).sum() / (masks[0] | masks[2]).sum() > 0.7
