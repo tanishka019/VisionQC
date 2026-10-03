@@ -38,6 +38,10 @@ BACKBONE       = os.getenv("VISIONQC_BACKBONE", "resnet18")
 LAYERS         = ("layer2", "layer3")
 CORESET_RATIO  = float(os.getenv("VISIONQC_CORESET_RATIO", "0.02"))
 BATCH_SIZE     = int(os.getenv("VISIONQC_BATCH_SIZE", "8"))
+CALIB_FOLDS    = 5
+# Coreset sampling is O(candidates x bank size); pre-sampling candidate patches (adjacent
+# patches are highly redundant) makes it much faster. 0 = use every patch.
+MAX_CANDIDATES = int(os.getenv("VISIONQC_MAX_CANDIDATES", "3000"))
 SEED           = 0
 MIN_IMAGES     = 5
 IMAGENET_MEAN  = (0.485, 0.456, 0.406)
@@ -101,10 +105,38 @@ def reset_model():
         MODEL_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def make_folds(paths: list[Path], k: int = CALIB_FOLDS, seed: int = SEED) -> list[list[Path]]:
+    """Split images into `k` disjoint, deterministic folds (each at least 1 image)."""
+    paths = sorted(paths)
+    random.Random(seed).shuffle(paths)
+    k = max(2, min(k, len(paths)))
+    return [paths[i::k] for i in range(k)]
+
+
+def _fit_bank(model, embeddings: list) -> None:
+    """Build the PatchCore memory bank (coreset) from per-image patch embeddings."""
+    import torch
+    stacked = torch.vstack(embeddings)
+    total = stacked.shape[0]
+    if MAX_CANDIDATES and total > MAX_CANDIDATES:
+        generator = torch.Generator().manual_seed(SEED)
+        stacked = stacked[torch.randperm(total, generator=generator)[:MAX_CANDIDATES]]
+        ratio = min(0.10, max(0.04, 250.0 / stacked.shape[0]))
+    else:
+        ratio = max(CORESET_RATIO, 0.05)
+    model.subsample_embedding(stacked, ratio)
+
+
 def train(training_images_dir: Path, product_name: str = "product", progress=None) -> dict:
     """
-    High-speed PatchCore training on a folder of 'good' images.
-    Builds the compact coreset memory bank in a single pass and calibrates against holdouts.
+    Train PatchCore on a folder of 'good' images.
+
+    The score scale is calibrated with k-fold cross-validation: every image is scored
+    against a memory bank built WITHOUT it, giving one unbiased "unseen good part" score
+    per image. (Calibrating on images the bank was built from, or on only a few images,
+    makes the scale far too tight and good parts get rejected.)
+
+    `progress(percent, message)` is called as training advances (optional).
     """
     import torch
     global _model, _calibration
@@ -118,60 +150,49 @@ def train(training_images_dir: Path, product_name: str = "product", progress=Non
     if len(image_files) < MIN_IMAGES:
         raise ValueError(f"Need at least {MIN_IMAGES} images, got {len(image_files)}")
 
-    torch.manual_seed(SEED)
+    torch.manual_seed(SEED)  # keep runs reproducible
     try:
         torch.set_num_threads(min(4, os.cpu_count() or 1))
     except Exception:
         pass
+    folds = make_folds(image_files)
     report(15, f"Loading {BACKBONE} backbone…")
     model = _build_model()
 
-    # 1. Fast feature extraction across all images
+    # 1. Extract patch embeddings once per image (the backbone is frozen)
     model.train()  # PatchcoreModel returns embeddings in train mode
-    embeddings = []
-    n_batches = (len(image_files) + BATCH_SIZE - 1) // BATCH_SIZE
+    emb: dict = {}
     with torch.no_grad():
-        for i, batch in enumerate(_batches(image_files)):
-            embeddings.append(model(batch))
-            done_batches = i + 1
-            report(20 + int(45 * done_batches / n_batches), f"Extracting features ({done_batches}/{n_batches})…")
+        for i in range(0, len(image_files), BATCH_SIZE):
+            chunk = image_files[i:i + BATCH_SIZE]
+            batch = torch.stack([_to_tensor(Image.open(p)) for p in chunk])
+            for path, e in zip(chunk, torch.chunk(model(batch), len(chunk))):
+                emb[path] = e
+            done = min(i + BATCH_SIZE, len(image_files))
+            report(15 + int(35 * done / len(image_files)), f"Extracting features ({done}/{len(image_files)})…")
 
-    # 2. Ultra-Fast Memory Bank Construction
-    report(70, "Building compact memory bank (fast coreset)…")
-    stacked_embeddings = torch.vstack(embeddings)
-    total_patches = stacked_embeddings.shape[0]
-
-    # Pre-sample uniform diverse candidates (adjacent patches are redundant)
-    # Reduces distance matrix from 40+ million down to <1 million operations (100x faster)
-    MAX_CANDIDATES = 3000
-    if total_patches > MAX_CANDIDATES:
-        generator = torch.Generator().manual_seed(SEED)
-        perm = torch.randperm(total_patches, generator=generator)[:MAX_CANDIDATES]
-        candidate_embeddings = stacked_embeddings[perm]
-        effective_ratio = min(0.10, max(0.04, 250.0 / candidate_embeddings.shape[0]))
-    else:
-        candidate_embeddings = stacked_embeddings
-        effective_ratio = max(CORESET_RATIO, 0.05)
-
-    model.subsample_embedding(candidate_embeddings, effective_ratio)
-    model.eval()
-
-    # 3. Fast baseline calibration on 3 representative normal images
-    report(88, "Calibrating normal baseline…")
-    calib_files = [image_files[0], image_files[len(image_files) // 2], image_files[-1]]
+    # 2. Calibrate with cross-validation
     scores, map_max, map_median = [], [], []
-    for batch in _batches(calib_files):
-        s, m = _score_raw(model, batch)
-        scores.extend(s.tolist())
-        map_max.extend(m.max(axis=(1, 2)).tolist())
-        map_median.extend(np.median(m, axis=(1, 2)).tolist())
-
+    for f, held_out in enumerate(folds):
+        report(50 + int(35 * f / len(folds)), f"Calibrating (fold {f + 1}/{len(folds)})…")
+        held = set(held_out)
+        _fit_bank(model, [e for p, e in emb.items() if p not in held])
+        for batch in _batches(held_out):
+            s, m = _score_raw(model, batch)
+            scores.extend(s.tolist())
+            map_max.extend(m.max(axis=(1, 2)).tolist())
+            map_median.extend(np.median(m, axis=(1, 2)).tolist())
     calibration = {
         "image_min": float(min(scores)),
         "image_max": float(max(scores)),
         "pixel_typical": float(np.median(map_median)),
         "pixel_max": float(max(map_max)),
     }
+
+    # 3. Final memory bank from ALL images
+    report(88, "Building final memory bank…")
+    _fit_bank(model, list(emb.values()))
+    model.eval()
 
     report(95, "Saving optimized model checkpoint…")
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
