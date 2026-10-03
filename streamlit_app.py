@@ -484,10 +484,7 @@ elif nav_choice == NAV_INSPECT:
     if not is_model_ready:
         st.warning("No trained model yet. Open the Train page and add photos of good parts first.")
     else:
-        sample_dir = ROOT_DIR / "images"
-        sample_images = sorted(list(sample_dir.glob("*.png"))) if sample_dir.exists() else []
-
-        tab_cam, tab_file, tab_samples = st.tabs(["Camera", "Upload", "Samples"])
+        tab_cam, tab_file = st.tabs(["Camera", "Upload"])
         image_to_inspect = None
         source_name = "upload.jpg"
 
@@ -502,20 +499,6 @@ elif nav_choice == NAV_INSPECT:
             if uploaded_file is not None:
                 image_to_inspect = Image.open(uploaded_file)
                 source_name = uploaded_file.name
-
-        with tab_samples:
-            if sample_images:
-                st.caption(f"{len(sample_images)} bundled sample screw photos.")
-                selected_sample = st.selectbox(
-                    "Sample photo",
-                    sample_images,
-                    format_func=lambda p: p.name
-                )
-                if selected_sample and st.button("Inspect selected sample"):
-                    image_to_inspect = Image.open(selected_sample)
-                    source_name = selected_sample.name
-            else:
-                st.info("No sample images found in the images folder.")
 
         if image_to_inspect is not None:
             st.write("")
@@ -561,30 +544,15 @@ elif nav_choice == NAV_TRAIN:
 
     product_input = st.text_input("Product name", value=product_name)
 
-    sample_dir = ROOT_DIR / "images"
-    has_sample_dir = sample_dir.exists() and len(list(sample_dir.glob("*.png"))) >= 5
-
-    MODE_SERVER = "Sample folder (instant)"
-    MODE_ZIP    = "Upload a .zip folder"
     MODE_DROP   = "Upload individual photos"
+    MODE_ZIP    = "Upload a .zip folder"
 
-    train_mode = st.radio(
-        "Training photos",
-        [MODE_SERVER, MODE_ZIP, MODE_DROP] if has_sample_dir else [MODE_ZIP, MODE_DROP],
-        index=0,
-        horizontal=True,
-    )
+    train_mode = st.radio("Training photos", [MODE_DROP, MODE_ZIP], index=0, horizontal=True)
 
     uploaded_zip = None
     uploaded_train_files = None
-    sample_count = 20
 
-    if train_mode == MODE_SERVER:
-        st.caption("Photos are read straight from the server, so there is nothing to upload.")
-        sample_count = st.slider("How many sample photos to train on", 5, min(50, len(list(sample_dir.glob("*.png")))), 20)
-        st.caption(f"VisionQC will learn from {sample_count} photos in `{sample_dir.name}/`.")
-
-    elif train_mode == MODE_ZIP:
+    if train_mode == MODE_ZIP:
         st.caption("Zip a folder of 15–30 good photos and drop it here. A single zip uploads much faster than many files.")
         uploaded_zip = st.file_uploader(
             "Zipped folder of good product photos",
@@ -596,7 +564,7 @@ elif nav_choice == NAV_TRAIN:
 
     elif train_mode == MODE_DROP:
         uploaded_train_files = st.file_uploader(
-            "10–25 photos of good parts (no defects)",
+            "Upload about 20 photos of good parts (no defects)",
             type=["jpg", "jpeg", "png", "webp"],
             accept_multiple_files=True,
             key="multi_file_uploader"
@@ -608,12 +576,7 @@ elif nav_choice == NAV_TRAIN:
         temp_dir = Path(tempfile.mkdtemp())
         try:
             # 1. Populate temp_dir based on chosen mode
-            if train_mode == MODE_SERVER:
-                samples = sorted(list(sample_dir.glob("*.png")))[:sample_count]
-                for s in samples:
-                    shutil.copy(s, temp_dir / s.name)
-
-            elif train_mode == MODE_ZIP:
+            if train_mode == MODE_ZIP:
                 if not uploaded_zip:
                     st.error("Please upload a .zip file containing your product photos first.")
                     st.stop()
@@ -627,8 +590,8 @@ elif nav_choice == NAV_TRAIN:
                                 dst.write(src.read())
 
             elif train_mode == MODE_DROP:
-                if not uploaded_train_files or len(uploaded_train_files) < 5:
-                    st.error("Please select at least 5 images (15–20 recommended) to train.")
+                if not uploaded_train_files or len(uploaded_train_files) < 10:
+                    st.error("Please select at least 10 images (about 20 recommended) to train.")
                     st.stop()
                 for uf in uploaded_train_files:
                     img = Image.open(uf)

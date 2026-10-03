@@ -38,7 +38,6 @@ In industrial manufacturing, identifying defective products on the assembly line
 - **📷 Multi-Modal Inspection Input**:
   - Live webcam capture with interactive snapshot.
   - Single or batch file upload (`JPG`, `PNG`, `WEBP`, `BMP`).
-  - Pre-bundled sample dataset selector for immediate zero-setup demonstrations.
 - **📜 Inspection History & Audit Log**: Searchable history table with PASS/FAIL filters, inspection IDs, timestamps, and one-click heatmap review.
 
 ---
@@ -200,7 +199,6 @@ VisionQC is validated against the industry-standard **MVTec Anomaly Detection (M
 
 - **Dataset Source**: [MVTec AD Benchmark](https://www.mvtec.com/company/research/datasets/mvtec-ad)
 - **Primary Category**: **Screws** (includes defects such as *scratch_head*, *scratch_neck*, *thread_side*, and *manipulated_front*).
-- **Bundled Samples**: The repository includes 380+ sample images under [`images/`](images/) for out-of-the-box training and inspection validation.
 
 ---
 
@@ -211,12 +209,11 @@ VisionQC is validated against the industry-standard **MVTec Anomaly Detection (M
 1. **Dashboard Overview**: Check the sidebar for **Today's Production KPIs** (Total Inspections, Pass Count, Reject Count, Rejection Rate %).
 2. **Train Model**:
    - Navigate to **🚀 Train Model**.
-   - Choose **📦 Use Bundled Sample Photos** (or upload 10–25 good product photos).
+   - Upload about 20 good product photos.
    - Click **🚀 Learn Normal**. The progress bar updates live as ResNet extracts patch embeddings and builds the memory bank (~20 seconds).
 3. **Inspect Product**:
    - Navigate to **🔍 Inspect Product**.
-   - Select the **🖼️ Sample Screws** tab (or upload a photo / use the webcam).
-   - Click **Inspect Selected Sample**.
+   - Upload a photo or use the webcam.
 4. **Analyze Results**:
    - **PASS/FAIL Banner**: Bold color-coded verdict.
    - **Metric Strip**: Anomaly Score, Supervisor Threshold, Deviation vs Limit, and Confidence %.
